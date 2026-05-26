@@ -32,6 +32,81 @@ def member_has_action(member: discord.Member, action: str) -> bool:
     return role in member.roles if role else False
 
 
+# ------------------------------------------------------------------ #
+#  Nickname helpers                                                    #
+# ------------------------------------------------------------------ #
+
+_BADGE_PREFIX_RE = re.compile(r"^\[PN-\d+\]\s*")
+
+
+def _base_name(member: discord.Member) -> str:
+    """Return display name with any existing [PN-XXX] prefix stripped."""
+    return _BADGE_PREFIX_RE.sub("", member.display_name).strip()
+
+
+async def set_badge_nickname(
+    member: discord.Member, badge_number: str, channel: Optional[discord.abc.Messageable] = None
+) -> None:
+    """Set nickname to [PN-XXX] Name, zero-padding the number to 3 digits."""
+    raw_digits = badge_number.split("-", 1)[1]
+    padded = raw_digits.zfill(3)
+    prefix = f"[PN-{padded}]"
+    base = _base_name(member)
+    new_nick = f"{prefix} {base}"
+    if len(new_nick) > 32:
+        allowed = 32 - len(prefix) - 1
+        new_nick = f"{prefix} {base[:allowed]}"
+    try:
+        await member.edit(nick=new_nick)
+        logger.info("Apodo actualizado para %s → %s", member, new_nick)
+    except discord.Forbidden:
+        logger.warning("Sin permisos para cambiar apodo de %s.", member)
+        if channel:
+            try:
+                await channel.send(
+                    embed=discord.Embed(
+                        title="⚠️ Sin Permisos para Cambiar Apodo",
+                        description=(
+                            f"No tengo permisos para cambiar el apodo de {member.mention}.\n"
+                            f"Por favor, actualízalo manualmente a: **{new_nick}**"
+                        ),
+                        color=config.COLOR_GOLD,
+                    )
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error("Error al cambiar apodo de %s: %s", member, e)
+
+
+async def clear_badge_nickname(
+    member: discord.Member, channel: Optional[discord.abc.Messageable] = None
+) -> None:
+    """Remove [PN-XXX] prefix from nickname, restoring the plain name."""
+    base = _base_name(member)
+    try:
+        await member.edit(nick=base if base != member.name else None)
+        logger.info("Apodo limpiado para %s → %s", member, base)
+    except discord.Forbidden:
+        logger.warning("Sin permisos para limpiar apodo de %s.", member)
+        if channel:
+            try:
+                await channel.send(
+                    embed=discord.Embed(
+                        title="⚠️ Sin Permisos para Cambiar Apodo",
+                        description=(
+                            f"No tengo permisos para limpiar el apodo de {member.mention}.\n"
+                            f"Por favor, retira manualmente el prefijo de la placa de su apodo."
+                        ),
+                        color=config.COLOR_GOLD,
+                    )
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error("Error al limpiar apodo de %s: %s", member, e)
+
+
 def _denied_embed(action: str) -> discord.Embed:
     role_id = None
     return discord.Embed(
@@ -153,6 +228,10 @@ class AsignarPlacaModal(discord.ui.Modal, title="Asignación de Placa Institucio
 
         # Update review embed buttons (disable them)
         await _disable_request_buttons(interaction, self.request_id)
+
+        # Change nickname immediately
+        if member:
+            await set_badge_nickname(member, badge_raw, channel=interaction.channel)
 
         # Official confirmation embed
         confirm_embed = discord.Embed(

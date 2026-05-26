@@ -15,7 +15,7 @@ from discord.ext import commands
 
 import config
 import database as db
-from cogs.views import PlacasView, member_has_action
+from cogs.views import PlacasView, member_has_action, clear_badge_nickname
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,9 @@ class Admin(commands.Cog, name="Administración"):
                 ephemeral=True,
             )
             return
+
+        # Clear nickname immediately
+        await clear_badge_nickname(oficial, channel=interaction.channel)
 
         embed = discord.Embed(
             title="🗑️ Placa Eliminada del Registro",
