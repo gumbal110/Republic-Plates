@@ -1,14 +1,17 @@
 """
-Bot de Placas Institucionales — Policía Nacional de la República Dominicana
-============================================================================
-Comandos de oficiales:
-  /solicitar_placa     — Solicitar asignación de placa (abre embed con botones)
+Bot Institucional — Policía Nacional de la República Dominicana
+===============================================================
+Oficiales:
+  /solicitar_placa         — Solicitar asignación de placa
+  /turno iniciar           — Iniciar turno con temporizador en vivo
+  /turno ver               — Ver todos los turnos activos
+  /actividad registrar     — Registrar actividad con 4 imágenes
 
-Comandos administrativos:
-  /config_roles        — Configurar roles con permisos por acción
-  /limpiar_placa       — Eliminar placa de un oficial
-  /ver_placas          — Panel paginado de todas las placas activas
-  /buscar_placa        — Buscar información de una placa por número
+Administrativos:
+  /config_roles            — Configurar roles con permisos
+  /limpiar_placa           — Eliminar placa de un oficial
+  /ver_placas              — Panel paginado de placas activas
+  /buscar_placa            — Buscar placa por número
 """
 
 import logging
@@ -61,7 +64,9 @@ class PNBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.load_extension("cogs.placas")
         await self.load_extension("cogs.admin")
-        logger.info("Cogs cargados: placas, admin")
+        await self.load_extension("cogs.turnos")
+        await self.load_extension("cogs.actividad")
+        logger.info("Cogs cargados: placas, admin, turnos, actividad")
 
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)

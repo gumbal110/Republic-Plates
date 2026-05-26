@@ -18,7 +18,8 @@ DISCORD_TOKEN: str = require_env("DISCORD_TOKEN")
 
 GUILD_ID: int = int(os.getenv("GUILD_ID", "0"))
 
-REVIEW_CHANNEL_ID: int = int(os.getenv("REVIEW_CHANNEL_ID", "0"))
+REVIEW_CHANNEL_ID:     int = int(os.getenv("REVIEW_CHANNEL_ID", "0"))
+ACTIVITIES_CHANNEL_ID: int = int(os.getenv("ACTIVITIES_CHANNEL_ID", "0"))
 
 # Embed colors
 COLOR_NAVY:    int = 0x001F5B

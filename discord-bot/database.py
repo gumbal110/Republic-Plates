@@ -55,6 +55,32 @@ def init_db() -> None:
                 details     TEXT,
                 created_at  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS shifts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         TEXT NOT NULL,
+                username        TEXT NOT NULL,
+                guild_id        TEXT NOT NULL,
+                badge_number    TEXT NOT NULL,
+                start_time      TEXT NOT NULL,
+                pause_start     TEXT,
+                paused_seconds  INTEGER NOT NULL DEFAULT 0,
+                end_time        TEXT,
+                status          TEXT NOT NULL DEFAULT 'activo',
+                message_id      TEXT,
+                channel_id      TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS activities (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT NOT NULL,
+                username      TEXT NOT NULL,
+                guild_id      TEXT NOT NULL,
+                badge_number  TEXT NOT NULL,
+                description   TEXT NOT NULL,
+                image_urls    TEXT NOT NULL,
+                registered_at TEXT NOT NULL
+            );
         """)
     logger.info("Base de datos inicializada: %s", DB_PATH)
 
@@ -242,3 +268,135 @@ def log_action(
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (action, actor_id, actor_name, target_id, target_name, details, now),
     )
+
+
+# ------------------------------------------------------------------ #
+#  Shifts                                                              #
+# ------------------------------------------------------------------ #
+
+def create_shift(
+    user_id: str, username: str, guild_id: str, badge_number: str
+) -> int:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO shifts (user_id, username, guild_id, badge_number, start_time)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, username, guild_id, badge_number, now),
+        )
+        return cur.lastrowid
+
+
+def update_shift_message(shift_id: int, message_id: str, channel_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE shifts SET message_id=?, channel_id=? WHERE id=?",
+            (message_id, channel_id, shift_id),
+        )
+
+
+def get_shift(shift_id: int) -> Optional[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+
+
+def get_active_shift(user_id: str, guild_id: str) -> Optional[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM shifts WHERE user_id=? AND guild_id=? AND status IN ('activo','pausado')",
+            (user_id, guild_id),
+        ).fetchone()
+
+
+def get_all_active_shifts(guild_id: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM shifts WHERE guild_id=? AND status IN ('activo','pausado') ORDER BY start_time ASC",
+            (guild_id,),
+        ).fetchall()
+
+
+def get_all_active_shifts_globally() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM shifts WHERE status IN ('activo','pausado')"
+        ).fetchall()
+
+
+def pause_shift(shift_id: int) -> None:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE shifts SET status='pausado', pause_start=? WHERE id=?",
+            (now, shift_id),
+        )
+
+
+def resume_shift(shift_id: int) -> None:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+        if not row or not row["pause_start"]:
+            conn.execute("UPDATE shifts SET status='activo', pause_start=NULL WHERE id=?", (shift_id,))
+            return
+        pause_start_dt = datetime.fromisoformat(row["pause_start"])
+        extra = int((datetime.utcnow() - pause_start_dt).total_seconds())
+        new_paused = row["paused_seconds"] + extra
+        conn.execute(
+            "UPDATE shifts SET status='activo', pause_start=NULL, paused_seconds=? WHERE id=?",
+            (new_paused, shift_id),
+        )
+
+
+def end_shift(shift_id: int) -> Optional[sqlite3.Row]:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+        if not row:
+            return None
+        paused = row["paused_seconds"]
+        if row["status"] == "pausado" and row["pause_start"]:
+            pause_start_dt = datetime.fromisoformat(row["pause_start"])
+            paused += int((datetime.utcnow() - pause_start_dt).total_seconds())
+        conn.execute(
+            "UPDATE shifts SET status='finalizado', end_time=?, paused_seconds=?, pause_start=NULL WHERE id=?",
+            (now, paused, shift_id),
+        )
+        return conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+
+
+def elapsed_seconds(shift: sqlite3.Row) -> int:
+    start = datetime.fromisoformat(shift["start_time"])
+    paused = shift["paused_seconds"]
+    if shift["status"] == "finalizado" and shift["end_time"]:
+        end = datetime.fromisoformat(shift["end_time"])
+        total = (end - start).total_seconds()
+    elif shift["status"] == "pausado" and shift["pause_start"]:
+        pause_start = datetime.fromisoformat(shift["pause_start"])
+        total = (pause_start - start).total_seconds()
+    else:
+        total = (datetime.utcnow() - start).total_seconds()
+    return max(0, int(total) - paused)
+
+
+# ------------------------------------------------------------------ #
+#  Activities                                                          #
+# ------------------------------------------------------------------ #
+
+def create_activity(
+    user_id: str,
+    username: str,
+    guild_id: str,
+    badge_number: str,
+    description: str,
+    image_urls: list[str],
+) -> int:
+    import json
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO activities (user_id, username, guild_id, badge_number, description, image_urls, registered_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, username, guild_id, badge_number, description, json.dumps(image_urls), now),
+        )
+        return cur.lastrowid
