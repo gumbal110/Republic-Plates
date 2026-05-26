@@ -9,12 +9,13 @@ def require_env(key: str) -> str:
     if not val:
         raise EnvironmentError(
             f"Variable de entorno requerida no configurada: {key}\n"
-            f"Asegúrate de haber configurado el archivo discord-bot/.env"
+            f"Asegúrate de que el secreto DISCORD_TOKEN está configurado en Replit."
         )
     return val
 
 
 DISCORD_TOKEN: str = require_env("DISCORD_TOKEN")
+
 
 ADMIN_ROLE_NAME: str = os.getenv("ADMIN_ROLE_NAME", "Gobierno")
 

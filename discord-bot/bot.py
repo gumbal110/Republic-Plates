@@ -23,6 +23,7 @@ import os
 import sys
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 import config
@@ -120,10 +121,6 @@ def main() -> None:
     logger.info("Base de datos inicializada en discord-bot/placas_rd.db")
 
     bot = PlacasBot()
-
-    # Ensure app_commands is importable on the bot instance
-    global app_commands
-    from discord import app_commands  # noqa: F811
 
     try:
         bot.run(config.DISCORD_TOKEN, log_handler=None)
