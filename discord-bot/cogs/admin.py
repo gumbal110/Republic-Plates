@@ -1,476 +1,278 @@
+"""
+Comandos administrativos:
+  /config_roles    — configurar roles con permisos de acción
+  /limpiar_placa   — eliminar la placa de un oficial
+  /ver_placas      — panel paginado de todas las placas
+  /buscar_placa    — buscar placa por número
+"""
+
+import logging
+from datetime import datetime
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import logging
-from datetime import datetime
-from functools import wraps
 
-import database as db
 import config
+import database as db
+from cogs.views import PlacasView, member_has_action
 
 logger = logging.getLogger(__name__)
 
 
-def is_admin():
-    """Check decorator: el usuario debe tener el rol de administrador configurado."""
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "Este comando solo puede usarse en un servidor.", ephemeral=True
-            )
-            return False
-        role = discord.utils.get(interaction.guild.roles, name=config.ADMIN_ROLE_NAME)
-        if role and role in interaction.user.roles:
-            return True
-        if interaction.user.guild_permissions.administrator:
-            return True
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🔒 Acceso Denegado",
-                description=(
-                    f"Necesitas el rol **{config.ADMIN_ROLE_NAME}** o permisos de administrador."
-                ),
-                color=config.ERROR_COLOR,
-            ),
-            ephemeral=True,
+# ------------------------------------------------------------------ #
+#  Config Roles Modal                                                  #
+# ------------------------------------------------------------------ #
+
+class ConfigRolesModal(discord.ui.Modal, title="Configuración de Roles — Policía Nacional"):
+    aprobar: discord.ui.TextInput = discord.ui.TextInput(
+        label="ID Rol: Aprobar placas",
+        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
+        required=False,
+        max_length=25,
+    )
+    rechazar: discord.ui.TextInput = discord.ui.TextInput(
+        label="ID Rol: Rechazar placas",
+        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
+        required=False,
+        max_length=25,
+    )
+    asignar: discord.ui.TextInput = discord.ui.TextInput(
+        label="ID Rol: Asignar placas",
+        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
+        required=False,
+        max_length=25,
+    )
+    eliminar: discord.ui.TextInput = discord.ui.TextInput(
+        label="ID Rol: Eliminar placas",
+        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
+        required=False,
+        max_length=25,
+    )
+    ver: discord.ui.TextInput = discord.ui.TextInput(
+        label="ID Rol: Ver todas las placas",
+        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
+        required=False,
+        max_length=25,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild.id)
+
+        fields = {
+            "aprobar": self.aprobar.value.strip(),
+            "rechazar": self.rechazar.value.strip(),
+            "asignar": self.asignar.value.strip(),
+            "eliminar": self.eliminar.value.strip(),
+            "ver": self.ver.value.strip(),
+        }
+
+        updated = []
+        errors = []
+        for action, role_id in fields.items():
+            if not role_id:
+                continue
+            if not role_id.isdigit():
+                errors.append(f"`{action}`: ID inválido (`{role_id}`)")
+                continue
+            role = interaction.guild.get_role(int(role_id))
+            if not role:
+                errors.append(f"`{action}`: Rol con ID `{role_id}` no encontrado en el servidor")
+                continue
+            db.set_role(guild_id, action, role_id)
+            updated.append(f"**{action.capitalize()}** → {role.mention}")
+
+        embed = discord.Embed(
+            title="⚙️ Configuración de Roles Actualizada",
+            color=config.COLOR_NAVY,
+            timestamp=datetime.utcnow(),
         )
-        return False
+        if updated:
+            embed.add_field(name="✅ Roles Configurados", value="\n".join(updated), inline=False)
+        if errors:
+            embed.add_field(name="❌ Errores", value="\n".join(errors), inline=False)
+        if not updated and not errors:
+            embed.description = "No se realizaron cambios (todos los campos estaban vacíos)."
+            embed.color = config.COLOR_GOLD
+        else:
+            embed.set_footer(text="Policía Nacional · Administración del Sistema")
 
-    return app_commands.check(predicate)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        logger.info("Roles configurados por %s en guild %s", interaction.user, guild_id)
 
+
+# ------------------------------------------------------------------ #
+#  Cog                                                                 #
+# ------------------------------------------------------------------ #
 
 class Admin(commands.Cog, name="Administración"):
-    """Comandos administrativos del sistema de placas."""
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # ------------------------------------------------------------------ #
-    #  /aprobar_solicitud                                                  #
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------- #
+    #  /config_roles                                                    #
+    # ---------------------------------------------------------------- #
     @app_commands.command(
-        name="aprobar_solicitud",
-        description="[ADMIN] Aprueba una solicitud de placa y la asigna automáticamente.",
+        name="config_roles",
+        description="[ADMIN] Configura los roles que pueden gestionar placas.",
     )
-    @app_commands.describe(solicitud_id="ID numérico de la solicitud a aprobar")
-    @is_admin()
-    async def aprobar_solicitud(
-        self, interaction: discord.Interaction, solicitud_id: int
+    @app_commands.default_permissions(administrator=True)
+    async def config_roles(self, interaction: discord.Interaction) -> None:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="🔒 Acceso Denegado",
+                    description="Solo los administradores del servidor pueden usar este comando.",
+                    color=config.COLOR_RED,
+                ),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(ConfigRolesModal())
+
+    # ---------------------------------------------------------------- #
+    #  /limpiar_placa                                                   #
+    # ---------------------------------------------------------------- #
+    @app_commands.command(
+        name="limpiar_placa",
+        description="[ADMIN] Elimina la placa institucional asignada a un oficial.",
+    )
+    @app_commands.describe(oficial="El oficial al que se le removerá la placa")
+    async def limpiar_placa(
+        self, interaction: discord.Interaction, oficial: discord.Member
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        request = db.get_request(solicitud_id)
-        if not request:
+        if not member_has_action(interaction.user, "eliminar"):
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="❌ Solicitud No Encontrada",
-                    description=f"No existe la solicitud con ID `{solicitud_id}`.",
-                    color=config.ERROR_COLOR,
+                    title="🔒 Acceso Denegado",
+                    description="No tienes el rol necesario para eliminar placas.",
+                    color=config.COLOR_RED,
                 ),
                 ephemeral=True,
             )
             return
 
-        if request["status"] != "pendiente":
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="⚠️ Solicitud Ya Procesada",
-                    description=f"Esta solicitud ya tiene el estado: **{request['status']}**.",
-                    color=config.WARNING_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
+        removed = db.remove_badge(
+            user_id=str(oficial.id),
+            removed_by=str(interaction.user.id),
+            removed_by_name=str(interaction.user),
+        )
 
-        try:
-            plate = db.approve_request(
-                request_id=solicitud_id,
-                reviewer_id=str(interaction.user.id),
-                reviewer_name=str(interaction.user),
-            )
-        except Exception as e:
-            logger.error("Error al aprobar solicitud %d: %s", solicitud_id, e)
+        if not removed:
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="❌ Error Interno",
-                    description="Ocurrió un error al procesar la aprobación.",
-                    color=config.ERROR_COLOR,
+                    title="⚠️ Sin Placa Asignada",
+                    description=f"{oficial.mention} no tiene ninguna placa registrada.",
+                    color=config.COLOR_GOLD,
                 ),
                 ephemeral=True,
             )
             return
 
         embed = discord.Embed(
-            title="✅ Solicitud Aprobada",
-            color=config.SUCCESS_COLOR,
+            title="🗑️ Placa Eliminada del Registro",
+            color=config.COLOR_RED,
             timestamp=datetime.utcnow(),
         )
-        embed.add_field(name="ID Solicitud", value=f"`{solicitud_id}`", inline=True)
-        embed.add_field(name="Placa Asignada", value=f"**`{plate}`**", inline=True)
-        embed.add_field(name="Solicitante", value=request["username"], inline=True)
-        embed.add_field(name="Aprobado por", value=str(interaction.user), inline=True)
-        embed.set_footer(text="Dirección General de Tránsito · RD")
+        embed.add_field(name="Placa", value=f"`{removed['badge_number']}`", inline=True)
+        embed.add_field(name="Oficial", value=oficial.mention, inline=True)
+        embed.add_field(name="Eliminado por", value=interaction.user.mention, inline=True)
+        embed.set_footer(text="Policía Nacional · Registro Institucional")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-        await self._notify_user(
-            guild=interaction.guild,
-            user_id=int(request["user_id"]),
-            title="✅ Solicitud de Placa Aprobada",
-            description=(
-                f"Tu solicitud de placa ha sido **aprobada**.\n\n"
-                f"🚗 **Placa asignada:** `{plate}`\n"
-                f"Guarda este número. Es tu identificación vehicular oficial."
-            ),
-            color=config.SUCCESS_COLOR,
-        )
-        await self._send_log(
-            guild=interaction.guild,
-            title="✅ Placa Aprobada",
-            fields={
-                "Placa": f"`{plate}`",
-                "Solicitante": request["username"],
-                "Aprobado por": str(interaction.user),
-                "ID Solicitud": f"`{solicitud_id}`",
-            },
-            color=config.SUCCESS_COLOR,
-        )
-        logger.info("Solicitud #%d aprobada por %s → placa %s", solicitud_id, interaction.user, plate)
+        # DM the officer
+        try:
+            dm_embed = discord.Embed(
+                title="🔒 Placa Revocada",
+                description=(
+                    f"Tu placa institucional **{removed['badge_number']}** ha sido "
+                    "eliminada del registro por un superior.\n"
+                    "Contacta a la Dirección de Recursos Humanos para más información."
+                ),
+                color=config.COLOR_RED,
+                timestamp=datetime.utcnow(),
+            )
+            dm_embed.set_footer(text="Policía Nacional · República Dominicana")
+            await oficial.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
 
-    # ------------------------------------------------------------------ #
-    #  /rechazar_solicitud                                                 #
-    # ------------------------------------------------------------------ #
+        logger.info("Placa %s eliminada de %s por %s", removed["badge_number"], oficial, interaction.user)
+
+    # ---------------------------------------------------------------- #
+    #  /ver_placas                                                      #
+    # ---------------------------------------------------------------- #
     @app_commands.command(
-        name="rechazar_solicitud",
-        description="[ADMIN] Rechaza una solicitud de placa con un motivo.",
+        name="ver_placas",
+        description="[ADMIN] Muestra el registro paginado de todas las placas activas.",
     )
-    @app_commands.describe(
-        solicitud_id="ID numérico de la solicitud a rechazar",
-        motivo="Motivo del rechazo",
-    )
-    @is_admin()
-    async def rechazar_solicitud(
-        self, interaction: discord.Interaction, solicitud_id: int, motivo: str
-    ) -> None:
+    async def ver_placas(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        if len(motivo) < 5:
+        if not member_has_action(interaction.user, "ver"):
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="❌ Motivo demasiado corto",
-                    description="El motivo de rechazo debe tener al menos 5 caracteres.",
-                    color=config.ERROR_COLOR,
+                    title="🔒 Acceso Denegado",
+                    description="No tienes el rol necesario para ver el registro completo.",
+                    color=config.COLOR_RED,
                 ),
                 ephemeral=True,
             )
             return
 
-        request = db.get_request(solicitud_id)
-        if not request:
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ Solicitud No Encontrada",
-                    description=f"No existe la solicitud con ID `{solicitud_id}`.",
-                    color=config.ERROR_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
+        badges = db.get_all_badges()
+        view = PlacasView(badges)
+        await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
 
-        if request["status"] != "pendiente":
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="⚠️ Solicitud Ya Procesada",
-                    description=f"Esta solicitud ya tiene el estado: **{request['status']}**.",
-                    color=config.WARNING_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
-
-        try:
-            db.reject_request(
-                request_id=solicitud_id,
-                reviewer_id=str(interaction.user.id),
-                reviewer_name=str(interaction.user),
-                reason=motivo,
-            )
-        except Exception as e:
-            logger.error("Error al rechazar solicitud %d: %s", solicitud_id, e)
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ Error Interno",
-                    description="Ocurrió un error al procesar el rechazo.",
-                    color=config.ERROR_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
-
-        embed = discord.Embed(
-            title="❌ Solicitud Rechazada",
-            color=config.ERROR_COLOR,
-            timestamp=datetime.utcnow(),
-        )
-        embed.add_field(name="ID Solicitud", value=f"`{solicitud_id}`", inline=True)
-        embed.add_field(name="Solicitante", value=request["username"], inline=True)
-        embed.add_field(name="Rechazado por", value=str(interaction.user), inline=True)
-        embed.add_field(name="Motivo", value=motivo, inline=False)
-        embed.set_footer(text="Dirección General de Tránsito · RD")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-        await self._notify_user(
-            guild=interaction.guild,
-            user_id=int(request["user_id"]),
-            title="❌ Solicitud de Placa Rechazada",
-            description=(
-                f"Tu solicitud de placa ha sido **rechazada**.\n\n"
-                f"📋 **Motivo:** {motivo}\n\n"
-                "Puedes enviar una nueva solicitud corregida cuando estés listo."
-            ),
-            color=config.ERROR_COLOR,
-        )
-        await self._send_log(
-            guild=interaction.guild,
-            title="❌ Placa Rechazada",
-            fields={
-                "Solicitante": request["username"],
-                "Rechazado por": str(interaction.user),
-                "Motivo": motivo,
-                "ID Solicitud": f"`{solicitud_id}`",
-            },
-            color=config.ERROR_COLOR,
-        )
-        logger.info("Solicitud #%d rechazada por %s", solicitud_id, interaction.user)
-
-    # ------------------------------------------------------------------ #
-    #  /ver_solicitudes                                                    #
-    # ------------------------------------------------------------------ #
-    @app_commands.command(
-        name="ver_solicitudes",
-        description="[ADMIN] Lista todas las solicitudes de placa pendientes.",
-    )
-    @is_admin()
-    async def ver_solicitudes(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        pending = db.get_pending_requests()
-
-        embed = discord.Embed(
-            title="📋 Solicitudes Pendientes",
-            color=config.WARNING_COLOR,
-            timestamp=datetime.utcnow(),
-        )
-
-        if not pending:
-            embed.description = "No hay solicitudes pendientes en este momento. ✅"
-        else:
-            lines = []
-            for r in pending:
-                created = r["created_at"][:10]
-                motivo_short = r["reason"][:60] + ("..." if len(r["reason"]) > 60 else "")
-                lines.append(
-                    f"**ID `{r['id']}`** — {r['username']} ({created})\n"
-                    f"*{motivo_short}*"
-                )
-            embed.description = "\n\n".join(lines[:15])
-            if len(pending) > 15:
-                embed.set_footer(text=f"Mostrando 15 de {len(pending)} solicitudes.")
-            else:
-                embed.set_footer(text=f"Total: {len(pending)} solicitud(es) pendiente(s).")
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    # ------------------------------------------------------------------ #
-    #  /revocar_placa                                                      #
-    # ------------------------------------------------------------------ #
-    @app_commands.command(
-        name="revocar_placa",
-        description="[ADMIN] Revoca una placa vehicular activa.",
-    )
-    @app_commands.describe(placa="Número de placa a revocar (ej: RD-1234)")
-    @is_admin()
-    async def revocar_placa(
-        self, interaction: discord.Interaction, placa: str
-    ) -> None:
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            row = db.revoke_plate(
-                plate=placa.upper(),
-                revoker_id=str(interaction.user.id),
-                revoker_name=str(interaction.user),
-            )
-        except ValueError as e:
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ Error",
-                    description=str(e),
-                    color=config.ERROR_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
-        except Exception as e:
-            logger.error("Error al revocar placa %s: %s", placa, e)
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ Error Interno",
-                    description="Ocurrió un error al revocar la placa.",
-                    color=config.ERROR_COLOR,
-                ),
-                ephemeral=True,
-            )
-            return
-
-        embed = discord.Embed(
-            title="🔒 Placa Revocada",
-            color=config.ERROR_COLOR,
-            timestamp=datetime.utcnow(),
-        )
-        embed.add_field(name="Placa", value=f"`{placa.upper()}`", inline=True)
-        embed.add_field(name="Propietario", value=row["username"], inline=True)
-        embed.add_field(name="Revocado por", value=str(interaction.user), inline=True)
-        embed.set_footer(text="Dirección General de Tránsito · RD")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-        await self._notify_user(
-            guild=interaction.guild,
-            user_id=int(row["user_id"]),
-            title="🔒 Tu Placa Ha Sido Revocada",
-            description=(
-                f"La placa **`{placa.upper()}`** registrada a tu nombre ha sido **revocada** "
-                f"por un administrador.\n\nContacta a las autoridades para más información."
-            ),
-            color=config.ERROR_COLOR,
-        )
-        await self._send_log(
-            guild=interaction.guild,
-            title="🔒 Placa Revocada",
-            fields={
-                "Placa": f"`{placa.upper()}`",
-                "Propietario": row["username"],
-                "Revocado por": str(interaction.user),
-            },
-            color=config.ERROR_COLOR,
-        )
-        logger.info("Placa %s revocada por %s", placa.upper(), interaction.user)
-
-    # ------------------------------------------------------------------ #
-    #  /buscar_placa                                                       #
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------- #
+    #  /buscar_placa                                                    #
+    # ---------------------------------------------------------------- #
     @app_commands.command(
         name="buscar_placa",
-        description="[ADMIN] Busca información completa de una placa.",
+        description="[ADMIN] Busca información de una placa por su número.",
     )
-    @app_commands.describe(placa="Número de placa a buscar (ej: RD-1234)")
-    @is_admin()
+    @app_commands.describe(numero="Número de placa a buscar (ej: PN-025)")
     async def buscar_placa(
-        self, interaction: discord.Interaction, placa: str
+        self, interaction: discord.Interaction, numero: str
     ) -> None:
         await interaction.response.defer(ephemeral=True)
-        row = db.lookup_plate(placa.upper())
 
-        if not row:
+        badge = db.get_badge_by_number(numero.strip().upper())
+
+        if not badge:
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="❌ Placa No Encontrada",
-                    description=f"La placa `{placa.upper()}` no existe en el registro.",
-                    color=config.ERROR_COLOR,
+                    description=(
+                        f"La placa **`{numero.upper()}`** no existe en el registro institucional.\n"
+                        "Verifica el número e inténtalo nuevamente."
+                    ),
+                    color=config.COLOR_RED,
                 ),
                 ephemeral=True,
             )
             return
 
-        status = "🔒 Revocada" if row["revoked"] else "✅ Activa"
         embed = discord.Embed(
-            title=f"🔍 Detalles de Placa `{row['plate']}`",
-            color=config.ERROR_COLOR if row["revoked"] else config.SUCCESS_COLOR,
+            title=f"🔍 Información de Placa `{badge['badge_number']}`",
+            color=config.COLOR_NAVY,
             timestamp=datetime.utcnow(),
         )
-        embed.add_field(name="Propietario", value=row["username"], inline=True)
-        embed.add_field(name="User ID", value=f"`{row['user_id']}`", inline=True)
-        embed.add_field(name="Estado", value=status, inline=True)
-        embed.add_field(name="Fecha de Emisión", value=row["issued_at"][:19], inline=True)
-        embed.add_field(name="ID Solicitud", value=f"`{row['request_id']}`", inline=True)
-        if row["revoked"]:
-            embed.add_field(name="Fecha Revocación", value=(row["revoked_at"] or "N/A")[:19], inline=True)
-            embed.add_field(name="Revocado por ID", value=f"`{row['revoked_by'] or 'N/A'}`", inline=True)
-        embed.set_footer(text="Dirección General de Tránsito · RD")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    # ------------------------------------------------------------------ #
-    #  /estadisticas                                                       #
-    # ------------------------------------------------------------------ #
-    @app_commands.command(
-        name="estadisticas",
-        description="[ADMIN] Muestra estadísticas del sistema de placas.",
-    )
-    @is_admin()
-    async def estadisticas(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        stats = db.get_stats()
-
-        embed = discord.Embed(
-            title="📊 Estadísticas del Sistema",
-            color=config.BOT_COLOR,
-            timestamp=datetime.utcnow(),
+        embed.add_field(name="Número de Placa", value=f"`{badge['badge_number']}`", inline=True)
+        embed.add_field(name="Oficial Asignado", value=f"<@{badge['user_id']}>", inline=True)
+        embed.add_field(name="Usuario", value=badge["username"], inline=True)
+        embed.add_field(name="Estado", value="✅ Activa", inline=True)
+        embed.add_field(name="Asignada por", value=badge["assigned_by"], inline=True)
+        embed.add_field(
+            name="Fecha de Emisión",
+            value=badge["assigned_at"][:10],
+            inline=True,
         )
-        embed.add_field(name="🚗 Placas Activas", value=str(stats["total_plates"]), inline=True)
-        embed.add_field(name="📋 Total Solicitudes", value=str(stats["total_requests"]), inline=True)
-        embed.add_field(name="⏳ Pendientes", value=str(stats["pending"]), inline=True)
-        embed.add_field(name="✅ Aprobadas", value=str(stats["approved"]), inline=True)
-        embed.add_field(name="❌ Rechazadas", value=str(stats["rejected"]), inline=True)
-        embed.set_footer(text="Dirección General de Tránsito · RD")
+        embed.set_footer(text="Policía Nacional · Dirección de Recursos Humanos")
         await interaction.followup.send(embed=embed, ephemeral=True)
-
-    # ------------------------------------------------------------------ #
-    #  Helpers                                                             #
-    # ------------------------------------------------------------------ #
-    async def _notify_user(
-        self,
-        guild: discord.Guild,
-        user_id: int,
-        title: str,
-        description: str,
-        color: int,
-    ) -> None:
-        try:
-            member = guild.get_member(user_id) if guild else None
-            if not member:
-                return
-            embed = discord.Embed(
-                title=title,
-                description=description,
-                color=color,
-                timestamp=datetime.utcnow(),
-            )
-            embed.set_footer(text="Dirección General de Tránsito · República Dominicana")
-            await member.send(embed=embed)
-        except discord.Forbidden:
-            logger.debug("No se pudo enviar DM al usuario %d (DMs cerrados).", user_id)
-        except Exception as e:
-            logger.warning("Error enviando DM al usuario %d: %s", user_id, e)
-
-    async def _send_log(
-        self,
-        guild: discord.Guild,
-        title: str,
-        fields: dict[str, str],
-        color: int,
-    ) -> None:
-        channel_id = config.LOG_CHANNEL_ID
-        if not channel_id or not guild:
-            return
-        channel = guild.get_channel(channel_id)
-        if not channel:
-            return
-        embed = discord.Embed(title=f"📋 {title}", color=color, timestamp=datetime.utcnow())
-        for name, value in fields.items():
-            embed.add_field(name=name, value=value, inline=True)
-        embed.set_footer(text="Log del Sistema · DGT RD")
-        try:
-            await channel.send(embed=embed)
-        except discord.Forbidden:
-            logger.warning("Sin permisos para enviar al canal de logs.")
 
 
 async def setup(bot: commands.Bot) -> None:

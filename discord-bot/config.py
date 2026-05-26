@@ -9,30 +9,23 @@ def require_env(key: str) -> str:
     if not val:
         raise EnvironmentError(
             f"Variable de entorno requerida no configurada: {key}\n"
-            f"Asegúrate de que el secreto DISCORD_TOKEN está configurado en Replit."
+            f"Asegúrate de que el secreto está configurado en Replit."
         )
     return val
 
 
 DISCORD_TOKEN: str = require_env("DISCORD_TOKEN")
 
-
-ADMIN_ROLE_NAME: str = os.getenv("ADMIN_ROLE_NAME", "Gobierno")
-
-LOG_CHANNEL_ID: int = int(os.getenv("LOG_CHANNEL_ID", "0"))
-APPROVAL_CHANNEL_ID: int = int(os.getenv("APPROVAL_CHANNEL_ID", "0"))
-
 GUILD_ID: int = int(os.getenv("GUILD_ID", "0"))
 
-BOT_COLOR: int = 0x002D62
-SUCCESS_COLOR: int = 0x27AE60
-ERROR_COLOR: int = 0xE74C3C
-WARNING_COLOR: int = 0xF39C12
-INFO_COLOR: int = 0x3498DB
+REVIEW_CHANNEL_ID: int = int(os.getenv("REVIEW_CHANNEL_ID", "0"))
 
-PLATE_EMOJI: str = "🚗"
-APPROVE_EMOJI: str = "✅"
-REJECT_EMOJI: str = "❌"
-PENDING_EMOJI: str = "⏳"
-REVOKE_EMOJI: str = "🔒"
-LOG_EMOJI: str = "📋"
+# Embed colors
+COLOR_NAVY:    int = 0x001F5B
+COLOR_GREEN:   int = 0x1E8449
+COLOR_RED:     int = 0xC0392B
+COLOR_GOLD:    int = 0xD4AC0D
+COLOR_GREY:    int = 0x616A6B
+COLOR_INFO:    int = 0x1A5276
+
+BADGE_REGEX = r"^PN-\d{3,6}$"

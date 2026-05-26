@@ -1,25 +1,17 @@
 """
-Bot de Registro de Placas Vehiculares
-República Dominicana · Sistema de Roleplay
+Bot de Placas Institucionales — Policía Nacional de la República Dominicana
+============================================================================
+Comandos de oficiales:
+  /solicitar_placa     — Solicitar asignación de placa (abre embed con botones)
 
-Comandos de usuario:
-  /solicitar_placa   — Solicitar registro de una nueva placa
-  /mis_placas        — Ver tus placas activas
-  /mis_solicitudes   — Ver historial de solicitudes
-  /consultar_placa   — Consultar info de cualquier placa
-
-Comandos administrativos (requieren rol configurado en ADMIN_ROLE_NAME):
-  /ver_solicitudes     — Listar solicitudes pendientes
-  /aprobar_solicitud   — Aprobar solicitud y asignar placa
-  /rechazar_solicitud  — Rechazar solicitud con motivo
-  /revocar_placa       — Revocar una placa activa
-  /buscar_placa        — Búsqueda completa de placa
-  /estadisticas        — Estadísticas del sistema
+Comandos administrativos:
+  /config_roles        — Configurar roles con permisos por acción
+  /limpiar_placa       — Eliminar placa de un oficial
+  /ver_placas          — Panel paginado de todas las placas activas
+  /buscar_placa        — Buscar información de una placa por número
 """
 
-import asyncio
 import logging
-import os
 import sys
 
 import discord
@@ -32,6 +24,7 @@ import database as db
 # ------------------------------------------------------------------ #
 #  Logging                                                             #
 # ------------------------------------------------------------------ #
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -43,21 +36,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bot")
 
-# Reduce noise from discord.py internals
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.http").setLevel(logging.WARNING)
 
 
 # ------------------------------------------------------------------ #
-#  Bot Setup                                                           #
+#  Bot                                                                 #
 # ------------------------------------------------------------------ #
+
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 
 
-class PlacasBot(commands.Bot):
+class PNBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(
             command_prefix="!",
@@ -66,28 +59,28 @@ class PlacasBot(commands.Bot):
         )
 
     async def setup_hook(self) -> None:
-        await self.load_extension("cogs.plates")
+        await self.load_extension("cogs.placas")
         await self.load_extension("cogs.admin")
-        logger.info("Cogs cargados.")
+        logger.info("Cogs cargados: placas, admin")
 
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
-            logger.info("Comandos sincronizados al servidor %d.", config.GUILD_ID)
+            logger.info("Slash commands sincronizados al servidor %d.", config.GUILD_ID)
         else:
             await self.tree.sync()
-            logger.info("Comandos sincronizados globalmente (puede tardar hasta 1 hora).")
+            logger.info("Slash commands sincronizados globalmente.")
 
     async def on_ready(self) -> None:
-        logger.info("=" * 50)
-        logger.info("Bot conectado como: %s (ID: %s)", self.user, self.user.id)
-        logger.info("Servidores: %d", len(self.guilds))
-        logger.info("=" * 50)
+        logger.info("=" * 55)
+        logger.info("  Bot conectado: %s  (ID: %s)", self.user, self.user.id)
+        logger.info("  Servidores activos: %d", len(self.guilds))
+        logger.info("=" * 55)
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="el Registro Vehicular RD 🚗",
+                name="el Registro Institucional PN 🚔",
             )
         )
 
@@ -98,17 +91,22 @@ class PlacasBot(commands.Bot):
     ) -> None:
         if isinstance(error, app_commands.CheckFailure):
             return
-        logger.error("Error en comando '%s': %s", interaction.command, error, exc_info=True)
-        msg = discord.Embed(
+        logger.error(
+            "Error en comando '%s': %s",
+            getattr(interaction.command, "name", "?"),
+            error,
+            exc_info=True,
+        )
+        embed = discord.Embed(
             title="❌ Error Inesperado",
-            description="Ocurrió un error al procesar el comando. Inténtalo de nuevo.",
-            color=config.ERROR_COLOR,
+            description="Ocurrió un error al procesar el comando. Inténtalo nuevamente.",
+            color=config.COLOR_RED,
         )
         try:
             if interaction.response.is_done():
-                await interaction.followup.send(embed=msg, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
             else:
-                await interaction.response.send_message(embed=msg, ephemeral=True)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception:
             pass
 
@@ -116,16 +114,14 @@ class PlacasBot(commands.Bot):
 # ------------------------------------------------------------------ #
 #  Entry point                                                         #
 # ------------------------------------------------------------------ #
+
 def main() -> None:
     db.init_db()
-    logger.info("Base de datos inicializada en discord-bot/placas_rd.db")
-
-    bot = PlacasBot()
-
+    bot = PNBot()
     try:
         bot.run(config.DISCORD_TOKEN, log_handler=None)
     except discord.LoginFailure:
-        logger.critical("Token de Discord inválido. Verifica la variable DISCORD_TOKEN.")
+        logger.critical("Token de Discord inválido. Verifica el secreto DISCORD_TOKEN.")
         sys.exit(1)
     except Exception as e:
         logger.critical("Error crítico al iniciar el bot: %s", e, exc_info=True)

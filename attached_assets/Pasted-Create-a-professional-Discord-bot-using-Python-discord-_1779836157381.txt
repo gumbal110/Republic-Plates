@@ -1,0 +1,112 @@
+Create a professional Discord bot using Python (discord.py latest version) with SQLite for a Dominican Republic Police roleplay server. The bot must manage official police badge numbers (placas de la Policía Nacional de la República Dominicana). Use Discord slash commands only.
+
+Main system:
+
+Officers use /solicitar_placa.
+
+When a request is sent, the bot publishes an embed in the configured review channel showing:
+
+officer username
+officer ID
+request date
+
+and two interactive buttons:
+
+✅ Aceptar
+
+❌ Rechazar
+
+When an authorized admin clicks Aceptar:
+
+the bot opens a modal asking:
+
+badge number (format PN-001 / PN-025 / PN-125)
+user mention or selected user
+
+before assigning:
+
+verify the user does not already have a badge
+
+verify the badge number is not already taken
+
+if badge already exists, reply:
+
+“⚠️ Esa placa ya está ocupada por otro oficial.”
+
+if user already has one:
+
+“⚠️ Este oficial ya posee una placa asignada.”
+
+if accepted:
+
+assign the badge
+
+save in SQLite
+
+send official confirmation:
+
+“🚔 Policía Nacional de la República Dominicana
+Se le asigna oficialmente al oficial @usuario la placa institucional PN-025.
+Registro institucional actualizado.”
+
+If clicking Rechazar:
+
+deny request
+
+notify officer
+
+remove request
+
+Add slash command /config_roles
+
+this command must ask for role IDs for:
+
+approve badges
+reject badges
+assign badges
+remove badges
+view all badges
+
+Save those role IDs in SQLite.
+
+Only those roles can use actions.
+
+Add slash command /limpiar_placa @usuario
+
+removes officer badge
+
+updates database
+
+Add slash command /ver_placas
+
+must open a paginated embed panel showing:
+
+🪪 PN-025 — @Usuario
+
+🪪 PN-051 — @Usuario
+
+one clean organized panel
+
+Add /buscar_placa PN-025
+
+show:
+
+badge
+
+user
+
+status
+
+Prevent duplicate badges
+
+Prevent multiple badges per user
+
+All messages must be in Spanish
+
+style must look official and professional for Policía Nacional República Dominicana roleplay
+
+use environment variables for Discord token
+
+sync slash commands automatically
+
+code must be clean and production ready
