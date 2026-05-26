@@ -1,9 +1,11 @@
 """
 Comandos administrativos:
-  /config_roles    — configurar roles con permisos de acción
   /limpiar_placa   — eliminar la placa de un oficial
   /ver_placas      — panel paginado de todas las placas
   /buscar_placa    — buscar placa por número
+  /estadisticas    — estadísticas del sistema
+
+  Para configurar roles usa /config
 """
 
 import logging
@@ -20,116 +22,9 @@ from cogs.views import PlacasView, member_has_action, clear_badge_nickname
 logger = logging.getLogger(__name__)
 
 
-# ------------------------------------------------------------------ #
-#  Config Roles Modal                                                  #
-# ------------------------------------------------------------------ #
-
-class ConfigRolesModal(discord.ui.Modal, title="Configuración de Roles — Policía Nacional"):
-    aprobar: discord.ui.TextInput = discord.ui.TextInput(
-        label="ID Rol: Aprobar placas",
-        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
-        required=False,
-        max_length=25,
-    )
-    rechazar: discord.ui.TextInput = discord.ui.TextInput(
-        label="ID Rol: Rechazar placas",
-        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
-        required=False,
-        max_length=25,
-    )
-    asignar: discord.ui.TextInput = discord.ui.TextInput(
-        label="ID Rol: Asignar placas",
-        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
-        required=False,
-        max_length=25,
-    )
-    eliminar: discord.ui.TextInput = discord.ui.TextInput(
-        label="ID Rol: Eliminar placas",
-        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
-        required=False,
-        max_length=25,
-    )
-    ver: discord.ui.TextInput = discord.ui.TextInput(
-        label="ID Rol: Ver todas las placas",
-        placeholder="ID numérico del rol (dejar vacío para no cambiar)",
-        required=False,
-        max_length=25,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        guild_id = str(interaction.guild.id)
-
-        fields = {
-            "aprobar": self.aprobar.value.strip(),
-            "rechazar": self.rechazar.value.strip(),
-            "asignar": self.asignar.value.strip(),
-            "eliminar": self.eliminar.value.strip(),
-            "ver": self.ver.value.strip(),
-        }
-
-        updated = []
-        errors = []
-        for action, role_id in fields.items():
-            if not role_id:
-                continue
-            if not role_id.isdigit():
-                errors.append(f"`{action}`: ID inválido (`{role_id}`)")
-                continue
-            role = interaction.guild.get_role(int(role_id))
-            if not role:
-                errors.append(f"`{action}`: Rol con ID `{role_id}` no encontrado en el servidor")
-                continue
-            db.set_role(guild_id, action, role_id)
-            updated.append(f"**{action.capitalize()}** → {role.mention}")
-
-        embed = discord.Embed(
-            title="⚙️ Configuración de Roles Actualizada",
-            color=config.COLOR_NAVY,
-            timestamp=datetime.utcnow(),
-        )
-        if updated:
-            embed.add_field(name="✅ Roles Configurados", value="\n".join(updated), inline=False)
-        if errors:
-            embed.add_field(name="❌ Errores", value="\n".join(errors), inline=False)
-        if not updated and not errors:
-            embed.description = "No se realizaron cambios (todos los campos estaban vacíos)."
-            embed.color = config.COLOR_GOLD
-        else:
-            embed.set_footer(text="Policía Nacional · Administración del Sistema")
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        logger.info("Roles configurados por %s en guild %s", interaction.user, guild_id)
-
-
-# ------------------------------------------------------------------ #
-#  Cog                                                                 #
-# ------------------------------------------------------------------ #
-
 class Admin(commands.Cog, name="Administración"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-
-    # ---------------------------------------------------------------- #
-    #  /config_roles                                                    #
-    # ---------------------------------------------------------------- #
-    @app_commands.command(
-        name="config_roles",
-        description="[ADMIN] Configura los roles que pueden gestionar placas.",
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def config_roles(self, interaction: discord.Interaction) -> None:
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="🔒 Acceso Denegado",
-                    description="Solo los administradores del servidor pueden usar este comando.",
-                    color=config.COLOR_RED,
-                ),
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(ConfigRolesModal())
 
     # ---------------------------------------------------------------- #
     #  /limpiar_placa                                                   #
@@ -186,7 +81,6 @@ class Admin(commands.Cog, name="Administración"):
         embed.set_footer(text="Policía Nacional · Registro Institucional")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-        # DM the officer
         try:
             dm_embed = discord.Embed(
                 title="🔒 Placa Revocada",
@@ -269,11 +163,38 @@ class Admin(commands.Cog, name="Administración"):
         embed.add_field(name="Usuario", value=badge["username"], inline=True)
         embed.add_field(name="Estado", value="✅ Activa", inline=True)
         embed.add_field(name="Asignada por", value=badge["assigned_by"], inline=True)
-        embed.add_field(
-            name="Fecha de Emisión",
-            value=badge["assigned_at"][:10],
-            inline=True,
+        embed.add_field(name="Fecha de Emisión", value=badge["assigned_at"][:10], inline=True)
+        embed.set_footer(text="Policía Nacional · Dirección de Recursos Humanos")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ---------------------------------------------------------------- #
+    #  /estadisticas                                                    #
+    # ---------------------------------------------------------------- #
+    @app_commands.command(
+        name="estadisticas",
+        description="[ADMIN] Muestra estadísticas del sistema de placas.",
+    )
+    async def estadisticas(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        if not member_has_action(interaction.user, "ver"):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🔒 Acceso Denegado",
+                    description="No tienes el rol necesario para ver estadísticas.",
+                    color=config.COLOR_RED,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        badges = db.get_all_badges()
+        embed = discord.Embed(
+            title="📊 Estadísticas del Sistema",
+            color=config.COLOR_NAVY,
+            timestamp=datetime.utcnow(),
         )
+        embed.add_field(name="🪪 Placas Activas", value=str(len(badges)), inline=True)
         embed.set_footer(text="Policía Nacional · Dirección de Recursos Humanos")
         await interaction.followup.send(embed=embed, ephemeral=True)
 

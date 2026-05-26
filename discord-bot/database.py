@@ -15,6 +15,23 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent column migrations — safe to run on every startup."""
+    migrations = [
+        "ALTER TABLE role_config ADD COLUMN role_ids TEXT DEFAULT '[]'",
+        "ALTER TABLE activities ADD COLUMN status TEXT NOT NULL DEFAULT 'pendiente'",
+        "ALTER TABLE activities ADD COLUMN reviewed_by TEXT",
+        "ALTER TABLE activities ADD COLUMN reviewed_at TEXT",
+        "ALTER TABLE activities ADD COLUMN message_id TEXT",
+        "ALTER TABLE activities ADD COLUMN channel_id TEXT",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript("""
@@ -82,6 +99,7 @@ def init_db() -> None:
                 registered_at TEXT NOT NULL
             );
         """)
+        _migrate(conn)
     logger.info("Base de datos inicializada: %s", DB_PATH)
 
 
@@ -216,37 +234,69 @@ def get_all_badges() -> list[sqlite3.Row]:
 #  Role Config                                                         #
 # ------------------------------------------------------------------ #
 
-ACTIONS = ("aprobar", "rechazar", "asignar", "eliminar", "ver")
+ACTIONS = (
+    "aprobar", "rechazar", "asignar", "eliminar", "ver",
+    "turno", "actividad", "revisar_actividad",
+)
+
+# Actions where "no roles configured" means open to anyone (not just admins)
+USER_ACTIONS = frozenset({"turno", "actividad"})
 
 
-def set_role(guild_id: str, action: str, role_id: str) -> None:
+def set_roles(guild_id: str, action: str, role_ids: list[str]) -> None:
+    import json as _json
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO role_config (guild_id, action, role_id)
-               VALUES (?, ?, ?)
-               ON CONFLICT(guild_id, action) DO UPDATE SET role_id=excluded.role_id""",
-            (guild_id, action, role_id),
+            """INSERT INTO role_config (guild_id, action, role_id, role_ids)
+               VALUES (?, ?, '', ?)
+               ON CONFLICT(guild_id, action) DO UPDATE SET role_ids=excluded.role_ids""",
+            (guild_id, action, _json.dumps(role_ids)),
         )
 
 
-def get_role(guild_id: str, action: str) -> Optional[str]:
+def get_roles(guild_id: str, action: str) -> list[str]:
+    import json as _json
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT role_id FROM role_config WHERE guild_id=? AND action=?",
+            "SELECT role_ids FROM role_config WHERE guild_id=? AND action=?",
             (guild_id, action),
         ).fetchone()
-        return row["role_id"] if row else None
+        if not row or not row["role_ids"]:
+            return []
+        try:
+            return _json.loads(row["role_ids"]) or []
+        except Exception:
+            return []
+
+
+def get_all_roles_multi(guild_id: str) -> dict[str, list[str]]:
+    import json as _json
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT action, role_ids FROM role_config WHERE guild_id=?", (guild_id,)
+        ).fetchall()
+        result: dict[str, list[str]] = {a: [] for a in ACTIONS}
+        for r in rows:
+            try:
+                result[r["action"]] = _json.loads(r["role_ids"] or "[]") or []
+            except Exception:
+                pass
+        return result
+
+
+# Legacy single-role helpers kept for any existing call sites
+def set_role(guild_id: str, action: str, role_id: str) -> None:
+    set_roles(guild_id, action, [role_id] if role_id else [])
+
+
+def get_role(guild_id: str, action: str) -> Optional[str]:
+    ids = get_roles(guild_id, action)
+    return ids[0] if ids else None
 
 
 def get_all_roles(guild_id: str) -> dict[str, Optional[str]]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT action, role_id FROM role_config WHERE guild_id=?", (guild_id,)
-        ).fetchall()
-        result = {a: None for a in ACTIONS}
-        for r in rows:
-            result[r["action"]] = r["role_id"]
-        return result
+    multi = get_all_roles_multi(guild_id)
+    return {k: (v[0] if v else None) for k, v in multi.items()}
 
 
 # ------------------------------------------------------------------ #
@@ -391,12 +441,46 @@ def create_activity(
     description: str,
     image_urls: list[str],
 ) -> int:
-    import json
+    import json as _json
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO activities (user_id, username, guild_id, badge_number, description, image_urls, registered_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, username, guild_id, badge_number, description, json.dumps(image_urls), now),
+            """INSERT INTO activities
+               (user_id, username, guild_id, badge_number, description, image_urls, registered_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente')""",
+            (user_id, username, guild_id, badge_number, description, _json.dumps(image_urls), now),
         )
         return cur.lastrowid
+
+
+def get_activity(activity_id: int) -> Optional[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM activities WHERE id=?", (activity_id,)
+        ).fetchone()
+
+
+def update_activity_message(activity_id: int, message_id: str, channel_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activities SET message_id=?, channel_id=? WHERE id=?",
+            (message_id, channel_id, activity_id),
+        )
+
+
+def update_activity_status(
+    activity_id: int, status: str, reviewer_name: str, reviewer_id: str
+) -> None:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activities SET status=?, reviewed_by=?, reviewed_at=? WHERE id=?",
+            (status, f"{reviewer_name} ({reviewer_id})", now, activity_id),
+        )
+
+
+def get_pending_activities() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM activities WHERE status='pendiente' AND message_id IS NOT NULL"
+        ).fetchall()

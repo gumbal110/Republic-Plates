@@ -22,14 +22,24 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------ #
 
 def member_has_action(member: discord.Member, action: str) -> bool:
-    """Return True if member holds the configured role for `action` or is an admin."""
+    """Return True if the member may perform `action`.
+
+    - Administrators always pass.
+    - If roles are configured: member must hold at least one.
+    - If no roles configured:
+        - USER_ACTIONS (turno, actividad) → open to all.
+        - Other actions → require Manage Server.
+    """
     if member.guild_permissions.administrator:
         return True
-    role_id = db.get_role(str(member.guild.id), action)
-    if not role_id:
-        return member.guild_permissions.manage_guild
-    role = member.guild.get_role(int(role_id))
-    return role in member.roles if role else False
+    role_ids = db.get_roles(str(member.guild.id), action)
+    if not role_ids:
+        return action in db.USER_ACTIONS or member.guild_permissions.manage_guild
+    return any(
+        member.guild.get_role(int(rid)) in member.roles
+        for rid in role_ids
+        if rid
+    )
 
 
 # ------------------------------------------------------------------ #

@@ -64,9 +64,10 @@ class PNBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.load_extension("cogs.placas")
         await self.load_extension("cogs.admin")
+        await self.load_extension("cogs.config")
         await self.load_extension("cogs.turnos")
         await self.load_extension("cogs.actividad")
-        logger.info("Cogs cargados: placas, admin, turnos, actividad")
+        logger.info("Cogs cargados: placas, admin, config, turnos, actividad")
 
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)
