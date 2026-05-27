@@ -69,10 +69,13 @@ def build_channels_embed(guild: discord.Guild, highlight: Optional[str] = None) 
     config = db.get_guild_config(str(guild.id))
     
     for channel_key, label in CHANNEL_CATEGORIES.items():
-        channel_id = getattr(config, channel_key, None) if config else None
+        channel_id = config[channel_key] if config else None
         if channel_id:
-            channel = guild.get_channel(int(channel_id))
-            channel_text = f"<#{channel_id}>" if channel else f"Canal: {channel_id}"
+            try:
+                channel = guild.get_channel(int(channel_id))
+                channel_text = f"<#{channel_id}>" if channel else f"Canal: {channel_id}"
+            except (ValueError, TypeError):
+                channel_text = "*Inválido*"
         else:
             channel_text = "*No configurado*"
         name = f"▶ {label}" if channel_key == highlight else label
@@ -101,18 +104,26 @@ class ModeSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        mode = self.values[0]
-        if mode == "roles":
-            self.view.clear_items()
-            self.view.add_item(ModeSelect())
-            self.view.add_item(CategorySelect())
-            embed = build_config_embed(interaction.guild)
-        else:
-            self.view.clear_items()
-            self.view.add_item(ModeSelect())
-            self.view.add_item(ChannelCategorySelect())
-            embed = build_channels_embed(interaction.guild)
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        try:
+            await interaction.response.defer()
+            mode = self.values[0]
+            if mode == "roles":
+                self.view.editing_channel = None
+                self.view.pending_channel_id = None
+                embed = build_config_embed(interaction.guild)
+                self.view.clear_items()
+                self.view.add_item(ModeSelect())
+                self.view.add_item(CategorySelect())
+            else:
+                self.view.editing_action = None
+                self.view.pending_role_ids = None
+                embed = build_channels_embed(interaction.guild)
+                self.view.clear_items()
+                self.view.add_item(ModeSelect())
+                self.view.add_item(ChannelCategorySelect())
+            await interaction.response.edit_message(embed=embed, view=self.view)
+        except Exception as e:
+            logger.error("Error en ModeSelect: %s", e, exc_info=True)
 
 
 class CategorySelect(discord.ui.Select):
@@ -129,7 +140,14 @@ class CategorySelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self.view.show_role_editor(interaction, self.values[0])
+        try:
+            await self.view.show_role_editor(interaction, self.values[0])
+        except Exception as e:
+            logger.error("Error en CategorySelect: %s", e, exc_info=True)
+            await interaction.response.send_message(
+                "Ocurrió un error inesperado. Inténtalo de nuevo.",
+                ephemeral=True,
+            )
 
 
 class ChannelCategorySelect(discord.ui.Select):
@@ -146,7 +164,14 @@ class ChannelCategorySelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self.view.show_channel_editor(interaction, self.values[0])
+        try:
+            await self.view.show_channel_editor(interaction, self.values[0])
+        except Exception as e:
+            logger.error("Error en ChannelCategorySelect: %s", e, exc_info=True)
+            await interaction.response.send_message(
+                "Ocurrió un error inesperado. Inténtalo de nuevo.",
+                ephemeral=True,
+            )
 
 
 class RoleConfigSelect(discord.ui.RoleSelect):
@@ -194,7 +219,7 @@ class SaveButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if hasattr(self.view, "editing_action") and self.view.editing_action:
+        if self.view.editing_action:
             # Guardando roles
             role_ids = self.view.pending_role_ids
             action = self.view.editing_action
@@ -230,9 +255,9 @@ class SaveButton(discord.ui.Button):
             embed.description = f"✅ **{label}** actualizado → {saved_text}"
             await interaction.response.edit_message(embed=embed, view=self.view)
         
-        elif hasattr(self.view, "editing_channel") and self.view.editing_channel:
+        elif self.view.editing_channel:
             # Guardando canal
-            channel_id = getattr(self.view, "pending_channel_id", None)
+            channel_id = self.view.pending_channel_id
             channel_key = self.view.editing_channel
 
             # Construir el diccionario con el parámetro dinámico
@@ -263,19 +288,27 @@ class BackButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        self.view.clear_items()
-        self.view.add_item(ModeSelect())
-        if hasattr(self.view, "editing_action"):
-            self.view.add_item(CategorySelect())
+        try:
+            self.view.clear_items()
+            self.view.add_item(ModeSelect())
+            
+            # Resetear el estado
             self.view.editing_action = None
             self.view.pending_role_ids = None
-            embed = build_config_embed(interaction.guild)
-        else:
-            self.view.add_item(ChannelCategorySelect())
             self.view.editing_channel = None
             self.view.pending_channel_id = None
-            embed = build_channels_embed(interaction.guild)
-        await interaction.response.edit_message(embed=embed, view=self.view)
+            
+            embed = discord.Embed(
+                title="⚙️ Configuración — Policía Nacional RD",
+                color=cfg.COLOR_NAVY,
+                timestamp=datetime.utcnow(),
+                description="Selecciona una opción para continuar.",
+            )
+            embed.set_footer(text="Policía Nacional · Registro Institucional")
+            
+            await interaction.response.edit_message(embed=embed, view=self.view)
+        except Exception as e:
+            logger.error("Error en BackButton: %s", e, exc_info=True)
 
 
 # ------------------------------------------------------------------ #
@@ -290,7 +323,6 @@ class ConfigView(discord.ui.View):
         self.editing_channel: Optional[str] = None
         self.pending_channel_id: Optional[str] = None
         self.add_item(ModeSelect())
-        self.add_item(CategorySelect())
 
     async def show_role_editor(self, interaction: discord.Interaction, action: str) -> None:
         self.editing_action = action
@@ -324,7 +356,7 @@ class ConfigView(discord.ui.View):
 
         label = CHANNEL_CATEGORIES.get(channel_key, channel_key).strip()
         config = db.get_guild_config(str(interaction.guild.id))
-        current_channel_id = getattr(config, channel_key, None) if config else None
+        current_channel_id = config[channel_key] if config else None
         current_text = (
             f"<#{current_channel_id}>" if current_channel_id else "*No configurado*"
         )
@@ -376,7 +408,13 @@ class Config(commands.Cog, name="Configuración"):
             return
 
         view = ConfigView()
-        embed = build_config_embed(interaction.guild)
+        embed = discord.Embed(
+            title="⚙️ Configuración — Policía Nacional RD",
+            color=cfg.COLOR_NAVY,
+            timestamp=datetime.utcnow(),
+            description="Selecciona una opción para configurar.",
+        )
+        embed.set_footer(text="Policía Nacional · Registro Institucional")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
