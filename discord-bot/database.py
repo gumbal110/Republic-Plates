@@ -98,6 +98,14 @@ def init_db() -> None:
                 image_urls    TEXT NOT NULL,
                 registered_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS guild_config (
+                guild_id             TEXT PRIMARY KEY,
+                channel_solicitudes  TEXT,
+                channel_aceptadas    TEXT,
+                channel_rechazadas   TEXT,
+                welcome_message      TEXT
+            );
         """)
         _migrate(conn)
     logger.info("Base de datos inicializada: %s", DB_PATH)
@@ -484,3 +492,82 @@ def get_pending_activities() -> list[sqlite3.Row]:
         return conn.execute(
             "SELECT * FROM activities WHERE status='pendiente' AND message_id IS NOT NULL"
         ).fetchall()
+
+
+# ------------------------------------------------------------------ #
+#  Guild Config (Canales y configuración por servidor)                 #
+# ------------------------------------------------------------------ #
+
+def get_guild_config(guild_id: str) -> Optional[sqlite3.Row]:
+    """Obtiene la configuración de un servidor."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM guild_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+
+
+def set_guild_config(
+    guild_id: str,
+    channel_solicitudes: Optional[str] = None,
+    channel_aceptadas: Optional[str] = None,
+    channel_rechazadas: Optional[str] = None,
+    welcome_message: Optional[str] = None,
+) -> None:
+    """Actualiza la configuración de un servidor."""
+    with get_connection() as conn:
+        # Obtener configuración actual
+        current = conn.execute(
+            "SELECT * FROM guild_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+        
+        if current:
+            # Actualizar solo los campos proporcionados
+            updates = {}
+            if channel_solicitudes is not None:
+                updates["channel_solicitudes"] = channel_solicitudes
+            if channel_aceptadas is not None:
+                updates["channel_aceptadas"] = channel_aceptadas
+            if channel_rechazadas is not None:
+                updates["channel_rechazadas"] = channel_rechazadas
+            if welcome_message is not None:
+                updates["welcome_message"] = welcome_message
+            
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates.keys())
+                values = list(updates.values()) + [guild_id]
+                conn.execute(
+                    f"UPDATE guild_config SET {set_clause} WHERE guild_id=?",
+                    values,
+                )
+        else:
+            # Insertar nueva configuración
+            conn.execute(
+                """INSERT INTO guild_config
+                   (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, welcome_message)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, welcome_message),
+            )
+
+
+def get_channel_solicitudes(guild_id: str) -> Optional[str]:
+    """Obtiene el canal de solicitudes de un servidor."""
+    config = get_guild_config(guild_id)
+    return config["channel_solicitudes"] if config else None
+
+
+def get_channel_aceptadas(guild_id: str) -> Optional[str]:
+    """Obtiene el canal de solicitudes aceptadas de un servidor."""
+    config = get_guild_config(guild_id)
+    return config["channel_aceptadas"] if config else None
+
+
+def get_channel_rechazadas(guild_id: str) -> Optional[str]:
+    """Obtiene el canal de solicitudes rechazadas de un servidor."""
+    config = get_guild_config(guild_id)
+    return config["channel_rechazadas"] if config else None
+
+
+def get_welcome_message(guild_id: str) -> Optional[str]:
+    """Obtiene el mensaje de bienvenida personalizado."""
+    config = get_guild_config(guild_id)
+    return config["welcome_message"] if config else None

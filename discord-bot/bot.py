@@ -90,6 +90,29 @@ class PNBot(commands.Bot):
             )
         )
 
+    async def on_member_join(self, member: discord.Member) -> None:
+        """Envía un mensaje de bienvenida a DM cuando un miembro se une."""
+        try:
+            welcome_embed = discord.Embed(
+                title="🚔 Bienvenido a Policía Nacional RD",
+                description=(
+                    f"¡Bienvenido {member.mention} al servidor de la Policía Nacional!\n\n"
+                    f"**Servidor:** {member.guild.name}\n"
+                    f"**Total de miembros:** {member.guild.member_count}\n\n"
+                    "Para solicitar tu placa institucional, usa el comando `/solicitar_placa`."
+                ),
+                color=config.COLOR_NAVY,
+            )
+            welcome_embed.set_thumbnail(url=member.guild.icon.url if member.guild.icon else None)
+            welcome_embed.set_footer(text="Policía Nacional · Registro Institucional")
+            
+            await member.send(embed=welcome_embed)
+            logger.info("Mensaje de bienvenida enviado a %s", member)
+        except discord.Forbidden:
+            logger.warning("No se pudo enviar DM a %s (privados deshabilitados)", member)
+        except Exception as e:
+            logger.error("Error al enviar bienvenida a %s: %s", member, e)
+
     async def on_app_command_error(
         self,
         interaction: discord.Interaction,
