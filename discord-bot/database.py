@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "ALTER TABLE activities ADD COLUMN message_id TEXT",
         "ALTER TABLE activities ADD COLUMN channel_id TEXT",
         "ALTER TABLE guild_config ADD COLUMN channel_logs TEXT",
+        "ALTER TABLE guild_config ADD COLUMN channel_support_panel TEXT",
+        "ALTER TABLE guild_config ADD COLUMN channel_application_panel TEXT",
+        "ALTER TABLE guild_config ADD COLUMN channel_applications TEXT",
+        "ALTER TABLE guild_config ADD COLUMN ticket_category TEXT",
     ]
     for sql in migrations:
         try:
@@ -108,7 +113,32 @@ def init_db() -> None:
                 channel_aceptadas    TEXT,
                 channel_rechazadas   TEXT,
                 channel_logs         TEXT,
+                channel_support_panel TEXT,
+                channel_application_panel TEXT,
+                channel_applications TEXT,
+                ticket_category      TEXT,
                 welcome_message      TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS tickets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                username     TEXT NOT NULL,
+                channel_id   TEXT NOT NULL,
+                ticket_type  TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'abierto',
+                created_at   TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS applications (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                username     TEXT NOT NULL,
+                answers      TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pendiente',
+                created_at   TEXT NOT NULL
             );
         """)
         _migrate(conn)
@@ -248,7 +278,7 @@ def get_all_badges() -> list[sqlite3.Row]:
 
 ACTIONS = (
     "aprobar", "rechazar", "asignar", "eliminar", "ver",
-    "turno", "actividad", "revisar_actividad",
+    "turno", "actividad", "revisar_actividad", "soporte", "postulaciones",
 )
 
 # Actions where "no roles configured" means open to anyone (not just admins)
@@ -499,6 +529,61 @@ def get_pending_activities() -> list[sqlite3.Row]:
 
 
 # ------------------------------------------------------------------ #
+#  Tickets y postulaciones                                             #
+# ------------------------------------------------------------------ #
+
+def create_ticket(
+    guild_id: str,
+    user_id: str,
+    username: str,
+    channel_id: str,
+    ticket_type: str,
+) -> int:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO tickets (guild_id, user_id, username, channel_id, ticket_type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (guild_id, user_id, username, channel_id, ticket_type, now),
+        )
+        return cur.lastrowid
+
+
+def get_open_ticket(guild_id: str, user_id: str) -> Optional[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """SELECT * FROM tickets
+               WHERE guild_id=? AND user_id=? AND status='abierto'
+               ORDER BY id DESC LIMIT 1""",
+            (guild_id, user_id),
+        ).fetchone()
+
+
+def close_ticket(channel_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE tickets SET status='cerrado' WHERE channel_id=? AND status='abierto'",
+            (channel_id,),
+        )
+
+
+def create_application(
+    guild_id: str,
+    user_id: str,
+    username: str,
+    answers: dict[str, str],
+) -> int:
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO applications (guild_id, user_id, username, answers, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (guild_id, user_id, username, json.dumps(answers, ensure_ascii=False), now),
+        )
+        return cur.lastrowid
+
+
+# ------------------------------------------------------------------ #
 #  Guild Config (Canales y configuración por servidor)                 #
 # ------------------------------------------------------------------ #
 
@@ -563,6 +648,10 @@ def set_guild_channel(guild_id: str, channel_key: str, channel_id: Optional[str]
         "channel_aceptadas",
         "channel_rechazadas",
         "channel_logs",
+        "channel_support_panel",
+        "channel_application_panel",
+        "channel_applications",
+        "ticket_category",
     }
     if channel_key not in allowed:
         raise ValueError(f"Canal no permitido: {channel_key}")

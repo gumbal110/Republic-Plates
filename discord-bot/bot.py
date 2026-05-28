@@ -55,6 +55,8 @@ logging.getLogger("discord.http").setLevel(logging.WARNING)
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
+intents.dm_messages = True
+intents.message_content = True
 
 
 class PNBot(commands.Bot):
@@ -71,7 +73,8 @@ class PNBot(commands.Bot):
         await self.load_extension("cogs.config")
         await self.load_extension("cogs.turnos")
         await self.load_extension("cogs.actividad")
-        logger.info("Cogs cargados: placas, admin, config, turnos, actividad")
+        await self.load_extension("cogs.support")
+        logger.info("Cogs cargados: placas, admin, config, turnos, actividad, support")
 
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)
