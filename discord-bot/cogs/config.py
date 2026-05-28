@@ -31,6 +31,18 @@ async def send_component_error(interaction: discord.Interaction) -> None:
         logger.exception("No se pudo enviar el mensaje de error de la interacción")
 
 
+async def edit_component_message(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
 CATEGORIES: dict[str, str] = {
     "aprobar":           "✅  Aprobar placas",
     "rechazar":          "❌  Rechazar placas",
@@ -118,6 +130,7 @@ class ModeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
+            await interaction.response.defer()
             mode = self.values[0]
             if mode == "roles":
                 self.view.editing_channel = None
@@ -133,7 +146,7 @@ class ModeSelect(discord.ui.Select):
                 self.view.clear_items()
                 self.view.add_item(ModeSelect())
                 self.view.add_item(ChannelCategorySelect())
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            await edit_component_message(interaction, embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en ModeSelect: %s", e, exc_info=True)
             await send_component_error(interaction)
@@ -154,6 +167,7 @@ class CategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
+            await interaction.response.defer()
             await self.view.show_role_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en CategorySelect: %s", e, exc_info=True)
@@ -175,6 +189,7 @@ class ChannelCategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
+            await interaction.response.defer()
             await self.view.show_channel_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en ChannelCategorySelect: %s", e, exc_info=True)
@@ -301,6 +316,7 @@ class BackButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
+            await interaction.response.defer()
             self.view.clear_items()
             self.view.add_item(ModeSelect())
             
@@ -318,7 +334,7 @@ class BackButton(discord.ui.Button):
             )
             embed.set_footer(text="Policía Nacional · Registro Institucional")
             
-            await interaction.response.edit_message(embed=embed, view=self.view)
+            await edit_component_message(interaction, embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en BackButton: %s", e, exc_info=True)
             await send_component_error(interaction)
@@ -361,7 +377,7 @@ class ConfigView(discord.ui.View):
             "Selecciona los roles en el menú de abajo y presiona **💾 Guardar**.\n"
             "*Seleccionar ningún rol = sin restricción (cualquiera puede usar esta acción).*"
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await edit_component_message(interaction, embed=embed, view=self)
 
     async def show_channel_editor(self, interaction: discord.Interaction, channel_key: str) -> None:
         self.editing_channel = channel_key
@@ -388,7 +404,7 @@ class ConfigView(discord.ui.View):
             "Selecciona el canal en el menú de abajo y presiona **💾 Guardar**.\n"
             "*Seleccionar ningún canal = no configurado.*"
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await edit_component_message(interaction, embed=embed, view=self)
 
     async def on_timeout(self) -> None:
         for item in self.children:
