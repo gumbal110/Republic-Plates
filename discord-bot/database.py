@@ -1,11 +1,13 @@
 import sqlite3
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = "discord-bot/pn_bot.db"
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "pn_bot.db"
 
 
 def get_connection() -> sqlite3.Connection:

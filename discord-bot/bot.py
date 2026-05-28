@@ -16,6 +16,7 @@ Administrativos:
 
 import logging
 import sys
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -28,13 +29,15 @@ import database as db
 #  Logging                                                             #
 # ------------------------------------------------------------------ #
 
+BASE_DIR = Path(__file__).resolve().parent
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("discord-bot/bot.log", encoding="utf-8"),
+        logging.FileHandler(BASE_DIR / "bot.log", encoding="utf-8"),
     ],
 )
 logger = logging.getLogger("bot")

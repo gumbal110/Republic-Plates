@@ -18,6 +18,19 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
+
+async def send_component_error(interaction: discord.Interaction) -> None:
+    """Responde a una interacción fallida para evitar el error genérico de Discord."""
+    message = "Ocurrió un error al procesar esta opción. Revisa la consola del bot."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        logger.exception("No se pudo enviar el mensaje de error de la interacción")
+
+
 CATEGORIES: dict[str, str] = {
     "aprobar":           "✅  Aprobar placas",
     "rechazar":          "❌  Rechazar placas",
@@ -123,6 +136,7 @@ class ModeSelect(discord.ui.Select):
             await interaction.response.edit_message(embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en ModeSelect: %s", e, exc_info=True)
+            await send_component_error(interaction)
 
 
 class CategorySelect(discord.ui.Select):
@@ -143,10 +157,7 @@ class CategorySelect(discord.ui.Select):
             await self.view.show_role_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en CategorySelect: %s", e, exc_info=True)
-            await interaction.response.send_message(
-                "Ocurrió un error inesperado. Inténtalo de nuevo.",
-                ephemeral=True,
-            )
+            await send_component_error(interaction)
 
 
 class ChannelCategorySelect(discord.ui.Select):
@@ -167,10 +178,7 @@ class ChannelCategorySelect(discord.ui.Select):
             await self.view.show_channel_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en ChannelCategorySelect: %s", e, exc_info=True)
-            await interaction.response.send_message(
-                "Ocurrió un error inesperado. Inténtalo de nuevo.",
-                ephemeral=True,
-            )
+            await send_component_error(interaction)
 
 
 class RoleConfigSelect(discord.ui.RoleSelect):
@@ -276,6 +284,11 @@ class SaveButton(discord.ui.Button):
             embed = build_channels_embed(interaction.guild)
             embed.description = f"✅ **{label}** actualizado → {saved_text}"
             await interaction.response.edit_message(embed=embed, view=self.view)
+        else:
+            await interaction.response.send_message(
+                "Selecciona primero qué deseas configurar.",
+                ephemeral=True,
+            )
 
 
 class BackButton(discord.ui.Button):
@@ -308,6 +321,7 @@ class BackButton(discord.ui.Button):
             await interaction.response.edit_message(embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en BackButton: %s", e, exc_info=True)
+            await send_component_error(interaction)
 
 
 # ------------------------------------------------------------------ #
@@ -379,6 +393,15 @@ class ConfigView(discord.ui.View):
     async def on_timeout(self) -> None:
         for item in self.children:
             item.disabled = True
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item,
+    ) -> None:
+        logger.error("Error en ConfigView item %s: %s", item, error, exc_info=True)
+        await send_component_error(interaction)
 
 
 # ------------------------------------------------------------------ #

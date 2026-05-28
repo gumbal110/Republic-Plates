@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv("discord-bot/.env")
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 
 def require_env(key: str) -> str:
