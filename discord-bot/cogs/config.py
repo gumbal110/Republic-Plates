@@ -1,6 +1,8 @@
 """
-/config — Panel visual de configuración de roles y canales con Select Menus.
-Solo administradores del servidor pueden usarlo.
+/config - Configuracion directa de permisos y canales.
+
+Este comando evita componentes interactivos para que la configuracion funcione
+de forma estable en cualquier version soportada de discord.py.
 """
 
 from __future__ import annotations
@@ -18,442 +20,211 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
-
-async def send_component_error(
-    interaction: discord.Interaction,
-    error: Optional[Exception] = None,
-) -> None:
-    """Responde a una interacción fallida para evitar el error genérico de Discord."""
-    message = "Ocurrió un error al procesar esta opción."
-    if error:
-        message += f"\n```py\n{type(error).__name__}: {error}\n```"
-    else:
-        message += " Revisa la consola del bot."
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except Exception:
-        logger.exception("No se pudo enviar el mensaje de error de la interacción")
-
-
-async def edit_component_message(
-    interaction: discord.Interaction,
-    *,
-    embed: discord.Embed,
-    view: discord.ui.View,
-) -> None:
-    await interaction.response.edit_message(embed=embed, view=view)
-
-
-CATEGORIES: dict[str, str] = {
-    "aprobar":           "✅  Aprobar placas",
-    "rechazar":          "❌  Rechazar placas",
-    "asignar":           "📋  Asignar placas",
-    "eliminar":          "🗑️  Limpiar placas",
-    "turno":             "🚔  Iniciar turno",
-    "actividad":         "📸  Registrar actividad",
-    "revisar_actividad": "🔍  Revisar actividades",
+PERMISSIONS: dict[str, str] = {
+    "aprobar": "Aceptar solicitudes de placa",
+    "rechazar": "Rechazar solicitudes de placa",
+    "asignar": "Asignar placas",
+    "eliminar": "Limpiar placas",
+    "ver": "Ver registro de placas",
 }
 
-CHANNEL_CATEGORIES: dict[str, str] = {
-    "channel_solicitudes":  "📨  Canal de Solicitudes",
-    "channel_aceptadas":    "✅  Canal de Solicitudes Aceptadas",
-    "channel_rechazadas":   "❌  Canal de Solicitudes Rechazadas",
+CHANNELS: dict[str, tuple[str, str]] = {
+    "solicitudes": ("channel_solicitudes", "Solicitudes de placa"),
+    "aceptadas": ("channel_aceptadas", "Solicitudes aceptadas"),
+    "rechazadas": ("channel_rechazadas", "Solicitudes rechazadas"),
+    "logs": ("channel_logs", "Logs administrativos"),
 }
 
 
-# ------------------------------------------------------------------ #
-#  Embed builders                                                      #
-# ------------------------------------------------------------------ #
+def _roles_text(guild: discord.Guild, role_ids: list[str]) -> str:
+    if not role_ids:
+        return "*Sin restriccion: admins o Manage Server*"
+    mentions: list[str] = []
+    for role_id in role_ids:
+        role = guild.get_role(int(role_id)) if role_id.isdigit() else None
+        mentions.append(role.mention if role else f"`{role_id}`")
+    return " ".join(mentions)
 
-def build_config_embed(guild: discord.Guild, highlight: Optional[str] = None) -> discord.Embed:
+
+def build_summary_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
-        title="⚙️ Configuración de Permisos — Policía Nacional RD",
+        title="Configuracion - Policia Nacional RD",
+        description="Estado actual de permisos y canales.",
         color=cfg.COLOR_NAVY,
         timestamp=datetime.utcnow(),
     )
+
     all_roles = db.get_all_roles_multi(str(guild.id))
-    for action, label in CATEGORIES.items():
-        role_ids = all_roles.get(action, [])
-        if role_ids:
-            roles_text = "  ".join(f"<@&{rid}>" for rid in role_ids)
-        else:
-            roles_text = "*Sin restricción*"
-        name = f"▶ {label}" if action == highlight else label
-        embed.add_field(name=name, value=roles_text, inline=False)
-    embed.set_footer(
-        text="Selecciona una categoría del menú para editar sus roles.  ·  Policía Nacional"
-    )
+    for action, label in PERMISSIONS.items():
+        embed.add_field(
+            name=label,
+            value=_roles_text(guild, all_roles.get(action, [])),
+            inline=False,
+        )
+
+    guild_config = db.get_guild_config(str(guild.id))
+    channel_lines: list[str] = []
+    for _, (db_key, label) in CHANNELS.items():
+        channel_id = guild_config[db_key] if guild_config and db_key in guild_config.keys() else None
+        channel_lines.append(f"**{label}:** {f'<#{channel_id}>' if channel_id else '*No configurado*'}")
+    embed.add_field(name="Canales", value="\n".join(channel_lines), inline=False)
+    embed.set_footer(text="Usa /config categoria:permiso o categoria:canal para editar.")
     return embed
 
 
-def build_channels_embed(guild: discord.Guild, highlight: Optional[str] = None) -> discord.Embed:
-    embed = discord.Embed(
-        title="📡 Configuración de Canales — Policía Nacional RD",
-        color=cfg.COLOR_NAVY,
-        timestamp=datetime.utcnow(),
-    )
-    config = db.get_guild_config(str(guild.id))
-    
-    for channel_key, label in CHANNEL_CATEGORIES.items():
-        channel_id = config[channel_key] if config else None
-        if channel_id:
-            try:
-                channel = guild.get_channel(int(channel_id))
-                channel_text = f"<#{channel_id}>" if channel else f"Canal: {channel_id}"
-            except (ValueError, TypeError):
-                channel_text = "*Inválido*"
-        else:
-            channel_text = "*No configurado*"
-        name = f"▶ {label}" if channel_key == highlight else label
-        embed.add_field(name=name, value=channel_text, inline=False)
-    embed.set_footer(
-        text="Selecciona una categoría del menú para editar los canales.  ·  Policía Nacional"
-    )
-    return embed
-
-
-# ------------------------------------------------------------------ #
-#  UI Components                                                       #
-# ------------------------------------------------------------------ #
-
-class ModeSelect(discord.ui.Select):
-    """Selector para elegir entre configurar roles o canales."""
-    def __init__(self) -> None:
-        options = [
-            discord.SelectOption(label="Permisos de Roles", value="roles", emoji="🔐"),
-            discord.SelectOption(label="Configuración de Canales", value="channels", emoji="📡"),
-        ]
-        super().__init__(
-            placeholder="Selecciona qué deseas configurar...",
-            options=options,
-            row=0,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            mode = self.values[0]
-            if mode == "roles":
-                self.view.editing_channel = None
-                self.view.pending_channel_id = None
-                embed = build_config_embed(interaction.guild)
-                self.view.clear_items()
-                self.view.add_item(ModeSelect())
-                self.view.add_item(CategorySelect())
-            else:
-                self.view.editing_action = None
-                self.view.pending_role_ids = None
-                embed = build_channels_embed(interaction.guild)
-                self.view.clear_items()
-                self.view.add_item(ModeSelect())
-                self.view.add_item(ChannelCategorySelect())
-            await edit_component_message(interaction, embed=embed, view=self.view)
-        except Exception as e:
-            logger.error("Error en ModeSelect: %s", e, exc_info=True)
-            await send_component_error(interaction, e)
-
-
-class CategorySelect(discord.ui.Select):
-    """Selector de categorías de roles."""
-    def __init__(self) -> None:
-        options = [
-            discord.SelectOption(label=label.strip(), value=action)
-            for action, label in CATEGORIES.items()
-        ]
-        super().__init__(
-            placeholder="Selecciona qué permisos deseas configurar...",
-            options=options,
-            row=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            await self.view.show_role_editor(interaction, self.values[0])
-        except Exception as e:
-            logger.error("Error en CategorySelect: %s", e, exc_info=True)
-            await send_component_error(interaction, e)
-
-
-class ChannelCategorySelect(discord.ui.Select):
-    """Selector de categorías de canales."""
-    def __init__(self) -> None:
-        options = [
-            discord.SelectOption(label=label.strip(), value=channel_key)
-            for channel_key, label in CHANNEL_CATEGORIES.items()
-        ]
-        super().__init__(
-            placeholder="Selecciona qué canal deseas configurar...",
-            options=options,
-            row=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            await self.view.show_channel_editor(interaction, self.values[0])
-        except Exception as e:
-            logger.error("Error en ChannelCategorySelect: %s", e, exc_info=True)
-            await send_component_error(interaction, e)
-
-
-class RoleConfigSelect(discord.ui.RoleSelect):
-    def __init__(self, action: str) -> None:
-        self.action = action
-        label = CATEGORIES.get(action, action).strip()
-        super().__init__(
-            placeholder=f"Roles para: {label}  (vacío = sin restricción)",
-            min_values=0,
-            max_values=10,
-            row=2,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        self.view.pending_role_ids = [str(r.id) for r in self.values]
-        await interaction.response.defer()
-
-
-class ChannelConfigSelect(discord.ui.ChannelSelect):
-    def __init__(self, channel_key: str) -> None:
-        self.channel_key = channel_key
-        label = CHANNEL_CATEGORIES.get(channel_key, channel_key).strip()
-        super().__init__(
-            placeholder=f"Selecciona canal para: {label}  (vacío = no configurado)",
-            min_values=0,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            row=2,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values:
-            self.view.pending_channel_id = str(self.values[0].id)
-        else:
-            self.view.pending_channel_id = None
-        await interaction.response.defer()
-
-
-class SaveButton(discord.ui.Button):
-    def __init__(self) -> None:
-        super().__init__(
-            label="💾  Guardar configuración",
-            style=discord.ButtonStyle.success,
-            row=3,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.view.editing_action:
-            # Guardando roles
-            role_ids = self.view.pending_role_ids
-            action = self.view.editing_action
-
-            if role_ids is None:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="⚠️ Sin cambios",
-                        description=(
-                            "Selecciona roles en el menú de abajo antes de guardar.\n"
-                            "Para eliminar todos los roles, selecciona ninguno y guarda."
-                        ),
-                        color=cfg.COLOR_GOLD,
-                    ),
-                    ephemeral=True,
-                )
-                return
-
-            db.set_roles(str(interaction.guild.id), action, role_ids)
-            label = CATEGORIES.get(action, action).strip()
-            saved_text = (
-                "  ".join(f"<@&{rid}>" for rid in role_ids) if role_ids else "*Sin restricción*"
-            )
-            logger.info("Config %s actualizada por %s: %s", action, interaction.user, role_ids)
-
-            self.view.clear_items()
-            self.view.add_item(ModeSelect())
-            self.view.add_item(CategorySelect())
-            self.view.editing_action = None
-            self.view.pending_role_ids = None
-
-            embed = build_config_embed(interaction.guild)
-            embed.description = f"✅ **{label}** actualizado → {saved_text}"
-            await interaction.response.edit_message(embed=embed, view=self.view)
-        
-        elif self.view.editing_channel:
-            # Guardando canal
-            channel_id = self.view.pending_channel_id
-            channel_key = self.view.editing_channel
-
-            # Construir el diccionario con el parámetro dinámico
-            update_dict = {channel_key: channel_id}
-            db.set_guild_config(str(interaction.guild.id), **update_dict)
-            
-            label = CHANNEL_CATEGORIES.get(channel_key, channel_key).strip()
-            saved_text = f"<#{channel_id}>" if channel_id else "*No configurado*"
-            logger.info("Config canal %s actualizada por %s: %s", channel_key, interaction.user, channel_id)
-
-            self.view.clear_items()
-            self.view.add_item(ModeSelect())
-            self.view.add_item(ChannelCategorySelect())
-            self.view.editing_channel = None
-            self.view.pending_channel_id = None
-
-            embed = build_channels_embed(interaction.guild)
-            embed.description = f"✅ **{label}** actualizado → {saved_text}"
-            await interaction.response.edit_message(embed=embed, view=self.view)
-        else:
-            await interaction.response.send_message(
-                "Selecciona primero qué deseas configurar.",
-                ephemeral=True,
-            )
-
-
-class BackButton(discord.ui.Button):
-    def __init__(self) -> None:
-        super().__init__(
-            label="← Volver",
-            style=discord.ButtonStyle.secondary,
-            row=3,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            self.view.clear_items()
-            self.view.add_item(ModeSelect())
-            
-            # Resetear el estado
-            self.view.editing_action = None
-            self.view.pending_role_ids = None
-            self.view.editing_channel = None
-            self.view.pending_channel_id = None
-            
-            embed = discord.Embed(
-                title="⚙️ Configuración — Policía Nacional RD",
-                color=cfg.COLOR_NAVY,
-                timestamp=datetime.utcnow(),
-                description="Selecciona una opción para continuar.",
-            )
-            embed.set_footer(text="Policía Nacional · Registro Institucional")
-            
-            await edit_component_message(interaction, embed=embed, view=self.view)
-        except Exception as e:
-            logger.error("Error en BackButton: %s", e, exc_info=True)
-            await send_component_error(interaction, e)
-
-
-# ------------------------------------------------------------------ #
-#  View                                                                #
-# ------------------------------------------------------------------ #
-
-class ConfigView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=300)
-        self.editing_action: Optional[str] = None
-        self.pending_role_ids: Optional[list[str]] = None
-        self.editing_channel: Optional[str] = None
-        self.pending_channel_id: Optional[str] = None
-        self.add_item(ModeSelect())
-
-    async def show_role_editor(self, interaction: discord.Interaction, action: str) -> None:
-        self.editing_action = action
-        self.pending_role_ids = None
-
-        label = CATEGORIES.get(action, action).strip()
-        current = db.get_roles(str(interaction.guild.id), action)
-        current_text = (
-            "  ".join(f"<@&{rid}>" for rid in current) if current else "*Sin restricción (todos)*"
-        )
-
-        self.clear_items()
-        self.add_item(ModeSelect())
-        self.add_item(CategorySelect())
-        self.add_item(RoleConfigSelect(action))
-        self.add_item(SaveButton())
-        self.add_item(BackButton())
-
-        embed = build_config_embed(interaction.guild, highlight=action)
-        embed.description = (
-            f"**Editando:** {label}\n"
-            f"**Roles actuales:** {current_text}\n\n"
-            "Selecciona los roles en el menú de abajo y presiona **💾 Guardar**.\n"
-            "*Seleccionar ningún rol = sin restricción (cualquiera puede usar esta acción).*"
-        )
-        await edit_component_message(interaction, embed=embed, view=self)
-
-    async def show_channel_editor(self, interaction: discord.Interaction, channel_key: str) -> None:
-        self.editing_channel = channel_key
-        self.pending_channel_id = None
-
-        label = CHANNEL_CATEGORIES.get(channel_key, channel_key).strip()
-        config = db.get_guild_config(str(interaction.guild.id))
-        current_channel_id = config[channel_key] if config else None
-        current_text = (
-            f"<#{current_channel_id}>" if current_channel_id else "*No configurado*"
-        )
-
-        self.clear_items()
-        self.add_item(ModeSelect())
-        self.add_item(ChannelCategorySelect())
-        self.add_item(ChannelConfigSelect(channel_key))
-        self.add_item(SaveButton())
-        self.add_item(BackButton())
-
-        embed = build_channels_embed(interaction.guild, highlight=channel_key)
-        embed.description = (
-            f"**Editando:** {label}\n"
-            f"**Canal actual:** {current_text}\n\n"
-            "Selecciona el canal en el menú de abajo y presiona **💾 Guardar**.\n"
-            "*Seleccionar ningún canal = no configurado.*"
-        )
-        await edit_component_message(interaction, embed=embed, view=self)
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-
-    async def on_error(
-        self,
-        interaction: discord.Interaction,
-        error: Exception,
-        item: discord.ui.Item,
-    ) -> None:
-        logger.error("Error en ConfigView item %s: %s", item, error, exc_info=True)
-        await send_component_error(interaction, error)
-
-
-# ------------------------------------------------------------------ #
-#  Cog                                                                 #
-# ------------------------------------------------------------------ #
-
-class Config(commands.Cog, name="Configuración"):
+class Config(commands.Cog, name="Configuracion"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
     @app_commands.command(
         name="config",
-        description="[ADMIN] Abre el panel visual de configuración de roles y canales.",
+        description="[ADMIN] Configura permisos por rol y canales del sistema de placas.",
     )
     @app_commands.default_permissions(administrator=True)
-    async def config_cmd(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        categoria="Que deseas configurar o consultar.",
+        permiso="Permiso que quieres editar.",
+        rol="Rol que recibira o perdera el permiso.",
+        accion="Como editar el permiso seleccionado.",
+        canal_tipo="Tipo de canal que quieres configurar.",
+        canal="Canal de texto para el tipo seleccionado. Omitelo para limpiar.",
+    )
+    @app_commands.choices(
+        categoria=[
+            app_commands.Choice(name="Ver configuracion actual", value="resumen"),
+            app_commands.Choice(name="Permisos de roles", value="permiso"),
+            app_commands.Choice(name="Canales", value="canal"),
+        ],
+        permiso=[
+            app_commands.Choice(name="Aceptar solicitudes", value="aprobar"),
+            app_commands.Choice(name="Rechazar solicitudes", value="rechazar"),
+            app_commands.Choice(name="Asignar placas", value="asignar"),
+            app_commands.Choice(name="Limpiar placas", value="eliminar"),
+            app_commands.Choice(name="Ver placas", value="ver"),
+        ],
+        accion=[
+            app_commands.Choice(name="Establecer solo este rol", value="establecer"),
+            app_commands.Choice(name="Agregar rol", value="agregar"),
+            app_commands.Choice(name="Quitar rol", value="quitar"),
+            app_commands.Choice(name="Limpiar permiso", value="limpiar"),
+        ],
+        canal_tipo=[
+            app_commands.Choice(name="Solicitudes de placa", value="solicitudes"),
+            app_commands.Choice(name="Solicitudes aceptadas", value="aceptadas"),
+            app_commands.Choice(name="Solicitudes rechazadas", value="rechazadas"),
+            app_commands.Choice(name="Logs administrativos", value="logs"),
+        ],
+    )
+    async def config_cmd(
+        self,
+        interaction: discord.Interaction,
+        categoria: app_commands.Choice[str],
+        permiso: Optional[app_commands.Choice[str]] = None,
+        rol: Optional[discord.Role] = None,
+        accion: Optional[app_commands.Choice[str]] = None,
+        canal_tipo: Optional[app_commands.Choice[str]] = None,
+        canal: Optional[discord.TextChannel] = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=discord.Embed(
-                    title="🔒 Acceso Denegado",
-                    description="Solo los administradores del servidor pueden usar `/config`.",
+                    title="Acceso denegado",
+                    description="Solo administradores pueden usar `/config`.",
                     color=cfg.COLOR_RED,
                 ),
                 ephemeral=True,
             )
             return
 
-        view = ConfigView()
+        if categoria.value == "resumen":
+            await interaction.followup.send(embed=build_summary_embed(interaction.guild), ephemeral=True)
+            return
+
+        if categoria.value == "permiso":
+            await self._configure_permission(interaction, permiso, rol, accion)
+            return
+
+        if categoria.value == "canal":
+            await self._configure_channel(interaction, canal_tipo, canal)
+            return
+
+        await interaction.followup.send("Categoria no valida.", ephemeral=True)
+
+    async def _configure_permission(
+        self,
+        interaction: discord.Interaction,
+        permiso: Optional[app_commands.Choice[str]],
+        rol: Optional[discord.Role],
+        accion: Optional[app_commands.Choice[str]],
+    ) -> None:
+        if permiso is None:
+            await interaction.followup.send("Selecciona el campo `permiso`.", ephemeral=True)
+            return
+
+        action = permiso.value
+        edit_action = accion.value if accion else "establecer"
+        current = db.get_roles(str(interaction.guild.id), action)
+
+        if edit_action == "limpiar":
+            new_roles: list[str] = []
+        else:
+            if rol is None:
+                await interaction.followup.send(
+                    "Selecciona el campo `rol`, o usa `accion: Limpiar permiso`.",
+                    ephemeral=True,
+                )
+                return
+
+            role_id = str(rol.id)
+            if edit_action == "establecer":
+                new_roles = [role_id]
+            elif edit_action == "agregar":
+                new_roles = current.copy()
+                if role_id not in new_roles:
+                    new_roles.append(role_id)
+            elif edit_action == "quitar":
+                new_roles = [rid for rid in current if rid != role_id]
+            else:
+                await interaction.followup.send("Accion de permiso no valida.", ephemeral=True)
+                return
+
+        db.set_roles(str(interaction.guild.id), action, new_roles)
+        logger.info("Permiso %s actualizado por %s: %s", action, interaction.user, new_roles)
+
         embed = discord.Embed(
-            title="⚙️ Configuración — Policía Nacional RD",
-            color=cfg.COLOR_NAVY,
+            title="Permiso actualizado",
+            color=cfg.COLOR_GREEN,
             timestamp=datetime.utcnow(),
-            description="Selecciona una opción para configurar.",
         )
-        embed.set_footer(text="Policía Nacional · Registro Institucional")
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        embed.add_field(name="Permiso", value=PERMISSIONS[action], inline=False)
+        embed.add_field(name="Roles permitidos", value=_roles_text(interaction.guild, new_roles), inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _configure_channel(
+        self,
+        interaction: discord.Interaction,
+        canal_tipo: Optional[app_commands.Choice[str]],
+        canal: Optional[discord.TextChannel],
+    ) -> None:
+        if canal_tipo is None:
+            await interaction.followup.send("Selecciona el campo `canal_tipo`.", ephemeral=True)
+            return
+
+        db_key, label = CHANNELS[canal_tipo.value]
+        channel_id = str(canal.id) if canal else None
+        db.set_guild_channel(str(interaction.guild.id), db_key, channel_id)
+        logger.info("Canal %s actualizado por %s: %s", db_key, interaction.user, channel_id)
+
+        embed = discord.Embed(
+            title="Canal actualizado",
+            color=cfg.COLOR_GREEN,
+            timestamp=datetime.utcnow(),
+        )
+        embed.add_field(name="Tipo", value=label, inline=False)
+        embed.add_field(name="Canal", value=canal.mention if canal else "*No configurado*", inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

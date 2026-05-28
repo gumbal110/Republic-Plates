@@ -123,7 +123,7 @@ def _denied_embed(action: str) -> discord.Embed:
         title="🔒 Acceso Denegado",
         description=(
             f"No tienes el rol necesario para **{action}** placas.\n"
-            "Contacta a un administrador para configurar los permisos con `/config_roles`."
+            "Contacta a un administrador para configurar los permisos con `/config`."
         ),
         color=config.COLOR_RED,
     )
@@ -156,6 +156,12 @@ class AsignarPlacaModal(discord.ui.Modal, title="Asignación de Placa Institucio
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
+
+        if not member_has_action(interaction.user, "asignar"):
+            await interaction.followup.send(
+                embed=_denied_embed("asignar"), ephemeral=True
+            )
+            return
 
         badge_raw = self.badge_number.value.strip().upper()
         uid_raw = self.user_id_input.value.strip().lstrip("<@!").rstrip(">")
@@ -257,7 +263,18 @@ class AsignarPlacaModal(discord.ui.Modal, title="Asignación de Placa Institucio
         confirm_embed.set_footer(
             text="Policía Nacional · Dirección de Recursos Humanos",
         )
-        await interaction.channel.send(embed=confirm_embed)
+        await _send_configured_channel_embed(
+            interaction.guild,
+            "channel_aceptadas",
+            confirm_embed,
+            fallback=interaction.channel,
+        )
+        await _send_log_embed(
+            interaction.guild,
+            title="Placa asignada",
+            description=f"{interaction.user.mention} asigno **{badge_raw}** a {member.mention if member else f'<@{uid_raw}>'}.",
+            color=config.COLOR_GREEN,
+        )
 
         # DM the officer
         if member:
@@ -389,6 +406,24 @@ class SolicitudView(discord.ui.View):
             ),
             ephemeral=True,
         )
+        rejected_embed = discord.Embed(
+            title="Solicitud de placa rechazada",
+            description=f"La solicitud de **{request['username']}** fue rechazada por {interaction.user.mention}.",
+            color=config.COLOR_RED,
+            timestamp=datetime.utcnow(),
+        )
+        await _send_configured_channel_embed(
+            interaction.guild,
+            "channel_rechazadas",
+            rejected_embed,
+            fallback=interaction.channel,
+        )
+        await _send_log_embed(
+            interaction.guild,
+            title="Solicitud rechazada",
+            description=f"{interaction.user.mention} rechazo la solicitud #{self.request_id} de **{request['username']}**.",
+            color=config.COLOR_RED,
+        )
         logger.info("Solicitud #%d rechazada por %s", self.request_id, interaction.user)
 
 
@@ -511,3 +546,39 @@ async def _dm_officer(
         logger.debug("No se pudo enviar DM a %s (DMs cerrados).", member)
     except Exception as e:
         logger.warning("Error enviando DM a %s: %s", member, e)
+
+
+async def _send_configured_channel_embed(
+    guild: discord.Guild,
+    channel_key: str,
+    embed: discord.Embed,
+    fallback: Optional[discord.abc.Messageable] = None,
+) -> None:
+    guild_config = db.get_guild_config(str(guild.id))
+    channel_id = guild_config[channel_key] if guild_config and channel_key in guild_config.keys() else None
+    channel = guild.get_channel(int(channel_id)) if channel_id else None
+    target = channel or fallback
+    if not target:
+        return
+    try:
+        await target.send(embed=embed)
+    except discord.Forbidden:
+        logger.warning("Sin permisos para enviar al canal configurado %s.", channel_key)
+    except Exception as e:
+        logger.warning("Error enviando embed al canal %s: %s", channel_key, e)
+
+
+async def _send_log_embed(
+    guild: discord.Guild,
+    title: str,
+    description: str,
+    color: int,
+) -> None:
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color,
+        timestamp=datetime.utcnow(),
+    )
+    embed.set_footer(text="Policia Nacional · Logs administrativos")
+    await _send_configured_channel_embed(guild, "channel_logs", embed)

@@ -17,7 +17,7 @@ from discord.ext import commands
 
 import config
 import database as db
-from cogs.views import PlacasView, member_has_action, clear_badge_nickname
+from cogs.views import PlacasView, member_has_action, clear_badge_nickname, _send_log_embed
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,15 @@ class Admin(commands.Cog, name="Administración"):
         embed.add_field(name="Eliminado por", value=interaction.user.mention, inline=True)
         embed.set_footer(text="Policía Nacional · Registro Institucional")
         await interaction.followup.send(embed=embed, ephemeral=True)
+        await _send_log_embed(
+            interaction.guild,
+            title="Placa eliminada",
+            description=(
+                f"{interaction.user.mention} elimino la placa **{removed['badge_number']}** "
+                f"de {oficial.mention}."
+            ),
+            color=config.COLOR_RED,
+        )
 
         try:
             dm_embed = discord.Embed(

@@ -84,9 +84,12 @@ class Placas(commands.Cog, name="Placas"):
 
         view = SolicitudView(request_id=request_id, requester_id=str(interaction.user.id))
 
-        # Post to review channel
+        # Post to configured review channel
         review_channel = None
-        if config.REVIEW_CHANNEL_ID:
+        configured_channel_id = db.get_channel_solicitudes(str(interaction.guild.id))
+        if configured_channel_id:
+            review_channel = interaction.guild.get_channel(int(configured_channel_id))
+        elif config.REVIEW_CHANNEL_ID:
             review_channel = interaction.guild.get_channel(config.REVIEW_CHANNEL_ID)
 
         if review_channel:

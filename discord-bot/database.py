@@ -26,6 +26,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "ALTER TABLE activities ADD COLUMN reviewed_at TEXT",
         "ALTER TABLE activities ADD COLUMN message_id TEXT",
         "ALTER TABLE activities ADD COLUMN channel_id TEXT",
+        "ALTER TABLE guild_config ADD COLUMN channel_logs TEXT",
     ]
     for sql in migrations:
         try:
@@ -106,6 +107,7 @@ def init_db() -> None:
                 channel_solicitudes  TEXT,
                 channel_aceptadas    TEXT,
                 channel_rechazadas   TEXT,
+                channel_logs         TEXT,
                 welcome_message      TEXT
             );
         """)
@@ -513,6 +515,7 @@ def set_guild_config(
     channel_solicitudes: Optional[str] = None,
     channel_aceptadas: Optional[str] = None,
     channel_rechazadas: Optional[str] = None,
+    channel_logs: Optional[str] = None,
     welcome_message: Optional[str] = None,
 ) -> None:
     """Actualiza la configuración de un servidor."""
@@ -531,6 +534,8 @@ def set_guild_config(
                 updates["channel_aceptadas"] = channel_aceptadas
             if channel_rechazadas is not None:
                 updates["channel_rechazadas"] = channel_rechazadas
+            if channel_logs is not None:
+                updates["channel_logs"] = channel_logs
             if welcome_message is not None:
                 updates["welcome_message"] = welcome_message
             
@@ -545,10 +550,32 @@ def set_guild_config(
             # Insertar nueva configuración
             conn.execute(
                 """INSERT INTO guild_config
-                   (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, welcome_message)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, welcome_message),
+                   (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, channel_logs, welcome_message)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (guild_id, channel_solicitudes, channel_aceptadas, channel_rechazadas, channel_logs, welcome_message),
             )
+
+
+def set_guild_channel(guild_id: str, channel_key: str, channel_id: Optional[str]) -> None:
+    """Actualiza un canal de guild_config, permitiendo limpiarlo con None."""
+    allowed = {
+        "channel_solicitudes",
+        "channel_aceptadas",
+        "channel_rechazadas",
+        "channel_logs",
+    }
+    if channel_key not in allowed:
+        raise ValueError(f"Canal no permitido: {channel_key}")
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)",
+            (guild_id,),
+        )
+        conn.execute(
+            f"UPDATE guild_config SET {channel_key}=? WHERE guild_id=?",
+            (channel_id, guild_id),
+        )
 
 
 def get_channel_solicitudes(guild_id: str) -> Optional[str]:
@@ -567,6 +594,12 @@ def get_channel_rechazadas(guild_id: str) -> Optional[str]:
     """Obtiene el canal de solicitudes rechazadas de un servidor."""
     config = get_guild_config(guild_id)
     return config["channel_rechazadas"] if config else None
+
+
+def get_channel_logs(guild_id: str) -> Optional[str]:
+    """Obtiene el canal de logs administrativos de un servidor."""
+    config = get_guild_config(guild_id)
+    return config["channel_logs"] if config and "channel_logs" in config.keys() else None
 
 
 def get_welcome_message(guild_id: str) -> Optional[str]:
