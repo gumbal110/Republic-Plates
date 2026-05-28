@@ -105,7 +105,6 @@ class ModeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.response.defer()
             mode = self.values[0]
             if mode == "roles":
                 self.view.editing_channel = None
