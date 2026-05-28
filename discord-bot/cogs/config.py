@@ -19,9 +19,16 @@ import database as db
 logger = logging.getLogger(__name__)
 
 
-async def send_component_error(interaction: discord.Interaction) -> None:
+async def send_component_error(
+    interaction: discord.Interaction,
+    error: Optional[Exception] = None,
+) -> None:
     """Responde a una interacción fallida para evitar el error genérico de Discord."""
-    message = "Ocurrió un error al procesar esta opción. Revisa la consola del bot."
+    message = "Ocurrió un error al procesar esta opción."
+    if error:
+        message += f"\n```py\n{type(error).__name__}: {error}\n```"
+    else:
+        message += " Revisa la consola del bot."
     try:
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)
@@ -37,10 +44,7 @@ async def edit_component_message(
     embed: discord.Embed,
     view: discord.ui.View,
 ) -> None:
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embed=embed, view=view)
-    else:
-        await interaction.response.edit_message(embed=embed, view=view)
+    await interaction.response.edit_message(embed=embed, view=view)
 
 
 CATEGORIES: dict[str, str] = {
@@ -130,7 +134,6 @@ class ModeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.response.defer()
             mode = self.values[0]
             if mode == "roles":
                 self.view.editing_channel = None
@@ -149,7 +152,7 @@ class ModeSelect(discord.ui.Select):
             await edit_component_message(interaction, embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en ModeSelect: %s", e, exc_info=True)
-            await send_component_error(interaction)
+            await send_component_error(interaction, e)
 
 
 class CategorySelect(discord.ui.Select):
@@ -167,11 +170,10 @@ class CategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.response.defer()
             await self.view.show_role_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en CategorySelect: %s", e, exc_info=True)
-            await send_component_error(interaction)
+            await send_component_error(interaction, e)
 
 
 class ChannelCategorySelect(discord.ui.Select):
@@ -189,11 +191,10 @@ class ChannelCategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.response.defer()
             await self.view.show_channel_editor(interaction, self.values[0])
         except Exception as e:
             logger.error("Error en ChannelCategorySelect: %s", e, exc_info=True)
-            await send_component_error(interaction)
+            await send_component_error(interaction, e)
 
 
 class RoleConfigSelect(discord.ui.RoleSelect):
@@ -316,7 +317,6 @@ class BackButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.response.defer()
             self.view.clear_items()
             self.view.add_item(ModeSelect())
             
@@ -337,7 +337,7 @@ class BackButton(discord.ui.Button):
             await edit_component_message(interaction, embed=embed, view=self.view)
         except Exception as e:
             logger.error("Error en BackButton: %s", e, exc_info=True)
-            await send_component_error(interaction)
+            await send_component_error(interaction, e)
 
 
 # ------------------------------------------------------------------ #
@@ -417,7 +417,7 @@ class ConfigView(discord.ui.View):
         item: discord.ui.Item,
     ) -> None:
         logger.error("Error en ConfigView item %s: %s", item, error, exc_info=True)
-        await send_component_error(interaction)
+        await send_component_error(interaction, error)
 
 
 # ------------------------------------------------------------------ #

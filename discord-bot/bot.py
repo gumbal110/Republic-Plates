@@ -41,6 +41,7 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("bot")
+logger.info("discord.py version: %s", discord.__version__)
 
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
